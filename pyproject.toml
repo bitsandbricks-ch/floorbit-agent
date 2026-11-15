@@ -6,7 +6,7 @@ readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.11"
 # Floorbit itself isn't a package: CI and the image put a checkout of FLOORBIT_REF on the path.
-dependencies = ["requests>=2.31"]
+dependencies = ["requests>=2.31", "simple-websocket>=1.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
