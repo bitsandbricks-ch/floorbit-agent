@@ -1,0 +1,23 @@
+# Mason (the `mason` command and the web app) reads this file. The org's defaults
+# (bitsandbricks-ch/.mason) say what every repo should look like; this file has the last
+# word for this repo. Review changes to it like code: it can turn org rules off.
+#
+#   mason bump floorbit-agent minor     PR that sets VERSION and adds the CHANGELOG section
+#   mason release tag floorbit-agent    pushes v<version>; .github/workflows/release.yml makes the release
+#   mason doctor floorbit-agent         settings, rulesets and files against the defaults
+#
+# Releases are immutable and made by the workflow, so push only the tag.
+[release]
+version = "VERSION"          # or pyproject.toml, package.json, plugin.yaml, Cargo.toml
+changelog = ["CHANGELOG.md"]
+tag = "v{version}"
+
+# What this repo needs on top of the defaults. Uncomment what applies.
+#
+# [pages]                    # a site in site/ (extras/workflows/pages.yml)
+# build = "workflow"
+# cname = "example.ch"
+# https = true
+#
+# protect = { checks = ["CI passed"] }
+# secrets = ["SOME_TOKEN"]

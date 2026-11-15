@@ -1,0 +1,85 @@
+name: CI
+
+# Lint and test on every pull request and on main. The jobs below find what the repo
+# has (pyproject.toml, package.json) and skip what isn't there, so a new repo is green
+# from the first commit. Replace them with the repo's own jobs as it grows, and keep
+# "CI passed" last: it is the one check the main ruleset requires.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: ref
+        run: echo "floorbit=$(tr -d '[:space:]' < FLOORBIT_REF)" >> "$GITHUB_OUTPUT"
+      # The agent reuses Floorbit's code (README, "How it relates to Floorbit"): the commit it's tested with.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bitsandbricks-ch/floorbit
+          ref: ${{ steps.ref.outputs.floorbit }}
+          path: floorbit-src
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - env:
+          FLOORBIT_SRC: floorbit-src
+        run: |
+          pip install -r floorbit-src/requirements.txt -e ".[dev]"
+          ruff check --exclude floorbit-src .
+          pytest -q
+
+  node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: has
+        run: |
+          if [ -f package.json ]; then echo "node=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.has.outputs.node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - if: steps.has.outputs.node
+        run: |
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+          npm run lint --if-present
+          npm run typecheck --if-present
+          npm test --if-present
+          npm run build --if-present
+
+  workflows:
+    # The workflow files themselves: syntax, and expressions that would let a PR title
+    # or branch name run as shell (actionlint with its shellcheck pass).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          pip install --quiet actionlint-py
+          actionlint -color
+
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [python, node, workflows]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' > /dev/null
