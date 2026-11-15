@@ -51,7 +51,8 @@ def test_it_says_who_it_is_and_which_protocol():
     host = FakeHost()
     a = make(host)
     assert a.hello()["name"] == "Spring LAN"
-    assert host.last_headers["Floorbit-Agent-Protocol"] == str(agent_mod.PROTOCOL)
+    # Protocol 1 until the hosted side says it knows more: an older Floorbit would answer 426.
+    assert host.last_headers["Floorbit-Agent-Protocol"] == "1"
     assert host.last_headers["Floorbit-Agent-Key"] == "fba_x_y"
 
 
@@ -137,3 +138,147 @@ def test_main_knows_its_commands(monkeypatch, tmp_path):
     assert agent_mod.main([]) == 2
     monkeypatch.setenv("FLOORBIT_AGENT_HEARTBEAT", str(tmp_path / "beat"))
     assert agent_mod.main(["health"]) == 1
+
+
+# ── Protocol 2: the WebSocket link, against a small hosted side on a local port ─────────────────
+
+class LinkHost:
+    """hello, the long poll, answers and the WebSocket link, on 127.0.0.1 (nothing else)."""
+
+    def __init__(self, link=True, refuse_link=False):
+        import threading
+
+        from werkzeug.serving import make_server
+
+        self.link, self.refuse_link = link, refuse_link
+        self.calls = [{"id": "1", "method": "devices", "args": []}]
+        self.answers, self.via = [], []
+        self.server = make_server("127.0.0.1", 0, self.app, threaded=True)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def app(self, environ, start_response):
+        import simple_websocket
+        from werkzeug.wrappers import Request, Response
+
+        req = Request(environ)
+        if req.path == "/api/agent/v1/hello":
+            body = {"name": "Spring LAN", "server_version": "0.2.0", "encodings": ["gzip"], "protocol": 2}
+            if self.link:
+                body.update(protocols=[1, 2], link="/api/agent/v2/link")
+            return Response(json.dumps(body), mimetype="application/json")(environ, start_response)
+        if req.path == "/api/agent/v2/link":
+            if self.refuse_link:
+                return Response("{}", status=401)(environ, start_response)
+            if not self.link:
+                return Response("{}", status=404)(environ, start_response)
+            ws = simple_websocket.Server(environ)
+            ws.send(json.dumps({"type": "hello", "name": "Spring LAN", "protocol": 2}))
+            calls, self.calls = self.calls, []
+            ws.send(json.dumps({"type": "calls", "calls": calls}))
+            message = json.loads(ws.receive(timeout=5))
+            self.answers += message["answers"]
+            self.via.append("link")
+            ws.close()
+            return Response()(environ, start_response)
+        if req.path == "/api/agent/v1/calls":
+            calls, self.calls = self.calls, []
+            if not calls:
+                time.sleep(0.2)
+            return Response(json.dumps({"calls": calls}), mimetype="application/json")(environ, start_response)
+        if req.path == "/api/agent/v1/answers":
+            raw = req.get_data()
+            if req.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            self.answers += json.loads(raw)["answers"]
+            self.via.append("poll")
+            return Response('{"taken": 1}', mimetype="application/json")(environ, start_response)
+        return Response("{}", status=404)(environ, start_response)
+
+    def close(self):
+        self.server.shutdown()
+
+
+def run_against(host, until, seconds=10):
+    import threading
+
+    import requests
+
+    http = requests.Session()
+    http.trust_env = False                 # straight to 127.0.0.1, never through a proxy
+    logged = []
+    a = agent_mod.Agent(host.url, "fba_x_y", lambda m, args: [{"name": "sw-1"}], http=http, log=logged.append)
+    errors = []
+
+    def go():
+        try:
+            a.run()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and not until() and not errors:
+        time.sleep(0.05)
+    a.stop()
+    t.join(5)
+    return a, logged, errors
+
+
+def test_hello_picks_the_protocol_and_the_link():
+    a = make(FakeHost(hello={"name": "New", "protocol": 2, "protocols": [1, 2], "link": "/api/agent/v2/link"}))
+    a.hello()
+    assert a.protocol == 2 and a.link_path == "/api/agent/v2/link"
+    old = make(FakeHost())                          # a hosted Floorbit of protocol 1
+    old.hello()
+    assert old.protocol == 1 and old.link_path is None
+    assert old._headers()["Floorbit-Agent-Protocol"] == "1"
+
+
+def test_calls_come_over_the_link():
+    host = LinkHost()
+    try:
+        _, logged, errors = run_against(host, lambda: host.answers)
+    finally:
+        host.close()
+    assert not errors
+    assert host.answers == [{"id": "1", "ok": True, "result": [{"name": "sw-1"}]}] and host.via == ["link"]
+    assert any("WebSocket link" in line for line in logged)
+
+
+def test_without_the_link_it_long_polls():
+    host = LinkHost(link=False)
+    try:
+        _, _, errors = run_against(host, lambda: host.answers)
+    finally:
+        host.close()
+    assert not errors and host.via == ["poll"] and host.answers[0]["result"] == [{"name": "sw-1"}]
+
+
+def test_a_link_that_cannot_open_falls_back_to_the_poll():
+    host = LinkHost()
+    original = host.app
+
+    def broken(environ, start_response):
+        from werkzeug.wrappers import Response
+        if environ["PATH_INFO"] == "/api/agent/v2/link":
+            return Response("{}", status=502)(environ, start_response)     # say a proxy without upgrades
+        return original(environ, start_response)
+
+    host.server.app = broken
+    try:
+        a, logged, errors = run_against(host, lambda: host.answers)
+    finally:
+        host.close()
+    assert not errors and host.via == ["poll"]
+    assert any("long poll" in line for line in logged) and a.link_after > time.monotonic()
+
+
+def test_a_refused_key_on_the_link_stops_the_agent():
+    host = LinkHost(refuse_link=True)
+    try:
+        _, _, errors = run_against(host, lambda: False, seconds=5)
+    finally:
+        host.close()
+    assert len(errors) == 1 and isinstance(errors[0], agent_mod.Refused)

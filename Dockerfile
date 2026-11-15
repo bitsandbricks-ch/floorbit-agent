@@ -23,6 +23,8 @@ COPY --from=floorbit /out/requirements.txt /tmp/requirements.txt
 # gunicorn serves Floorbit's pages; the agent serves none.
 RUN grep -v '^gunicorn' /tmp/requirements.txt > /tmp/req.txt \
     && pip install --no-cache-dir -r /tmp/req.txt && rm /tmp/requirements.txt /tmp/req.txt
+# The agent's own dependencies, as in pyproject.toml (simple-websocket: the WebSocket link).
+RUN pip install --no-cache-dir "requests>=2.31" "simple-websocket>=1.0"
 COPY --from=floorbit /out/ /app/
 RUN rm /app/requirements.txt
 COPY floorbit_agent/ /app/floorbit_agent/

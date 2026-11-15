@@ -3,8 +3,10 @@
 It runs on the event network, in the same image as Floorbit (``python -m floorbit_agent``), with the
 event's own monitoring plugin set up the usual way (``LIBRENMS_URL`` and ``LIBRENMS_TOKEN``, or any
 other monitoring plugin). It connects out to the hosted Floorbit (``FLOORBIT_URL``) with its key
-(``FLOORBIT_AGENT_KEY``), asks for calls in a long poll, runs each one against the local plugin and
-posts the answer back. The hosted side is floorbit/agent_link.py in bitsandbricks-ch/floorbit.
+(``FLOORBIT_AGENT_KEY``), takes calls, runs each one against the local plugin and sends the answer
+back. Calls come over a WebSocket link (protocol 2, ``wss://``) when the hosted Floorbit offers
+one, and over an HTTPS long poll when it doesn't or the link can't be opened. The hosted side is
+floorbit/agent_link.py in bitsandbricks-ch/floorbit.
 
 Nothing listens here unless asked: the agent makes outgoing HTTPS requests, and only with
 ``FLOORBIT_AGENT_SYSLOG_PORT`` or ``FLOORBIT_AGENT_FLOWS_PORT`` does it take syslog or flows from
@@ -26,7 +28,10 @@ from concurrent.futures import ThreadPoolExecutor
 KEY_HEADER = 'Floorbit-Agent-Key'
 VERSION_HEADER = 'Floorbit-Agent-Version'
 PROTOCOL_HEADER = 'Floorbit-Agent-Protocol'
-PROTOCOL = 1              # the agent protocol this agent speaks; the hosted side says which it does
+PROTOCOL = 2              # the newest agent protocol this agent speaks; the hosted side says which it does
+LINK_IDLE = 60            # the hosted side sends something at least every 20 s: quiet this long, it's gone
+LINK_RETRY = 300          # after the link failed, long-poll this long before trying it again
+LINK_STEADY = 30          # a link that drops sooner than this counts as failed
 POLL_WAIT = 25            # the hosted side holds a poll at most this long
 HTTP_TIMEOUT = 40         # a bit more than a poll
 MAX_BACKOFF = 60
@@ -148,11 +153,18 @@ class Agent:
         self.answered = 0
         self.poll_wait = POLL_WAIT
         self.gzip = False         # once hello says the hosted Floorbit takes gzipped bodies
+        self.protocol = 1         # what the headers say: 1 until hello shows the hosted side knows more
+        self.link_path = None     # the WebSocket link, once hello offers one
+        self.link_after = 0       # don't try the link again before this (time.monotonic())
+        self.link_up = False
+        self.link_opened = False
+        self._ws = None
+        self._ws_lock = threading.Lock()
         self.heartbeat = None     # a file touched after each poll that got through, for `health`
         self._beat_at = 0
 
     def _headers(self, json_body=False):
-        h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(PROTOCOL)}
+        h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(self.protocol)}
         if json_body:
             h['Content-Type'] = 'application/json'
         return h
@@ -171,7 +183,55 @@ class Agent:
         body = self._check(self.http.get(f'{self.url}/api/agent/v1/hello', headers=self._headers(),
                                          timeout=HTTP_TIMEOUT))
         self.gzip = 'gzip' in (body.get('encodings') or [])
+        # A hosted Floorbit of protocol 1 says nothing of "protocols": stay on 1 and the long poll.
+        known = {p for p in body.get('protocols') or [body.get('protocol') or 1] if isinstance(p, int)}
+        self.protocol = max(known & set(range(1, PROTOCOL + 1)), default=1)
+        link = body.get('link')
+        self.link_path = link if self.protocol >= 2 and isinstance(link, str) and link.startswith('/') else None
         return body
+
+    def link(self):
+        """Take calls over the WebSocket link until it closes. Raises Refused for a bad key, and
+        anything else when it can't be opened or drops (the caller falls back to the long poll)."""
+        import simple_websocket
+        url = 'ws' + self.url[len('http'):] + self.link_path     # https:// -> wss://
+        try:
+            ws = simple_websocket.Client.connect(url, headers=self._headers(), ping_interval=25,
+                                                 max_message_size=32 * 1024 * 1024)
+        except simple_websocket.ConnectionError as exc:
+            if getattr(exc, 'status_code', None) in (401, 426):
+                raise Refused('The hosted Floorbit refused the agent key: it is wrong or was revoked. '
+                              'Enrol the agent again.') from exc
+            raise
+        self._ws, self.link_up, self.link_opened = ws, True, True
+        self.log('[agent] live over the WebSocket link')
+        try:
+            while not self._stop.is_set():
+                raw = ws.receive(timeout=LINK_IDLE)
+                if raw is None:
+                    raise TimeoutError(f'the link was quiet for {LINK_IDLE} s')
+                self.beat()
+                message = json.loads(raw)
+                if message.get('type') == 'calls':
+                    for call in message.get('calls') or []:
+                        self._pool.submit(self._run, call)
+                elif message.get('type') == 'ping':
+                    self._link_send({'type': 'ping'})
+        finally:
+            self._ws, self.link_up = None, False
+            with contextlib.suppress(Exception):
+                ws.close()
+
+    def _link_send(self, message):
+        ws = self._ws
+        if ws is None:
+            return False
+        try:
+            with self._ws_lock:       # answers come from several worker threads
+                ws.send(json.dumps(message, default=str))
+            return True
+        except Exception:  # noqa: BLE001  # the link dropped: the caller sends it over HTTPS
+            return False
 
     def _post(self, path, payload):
         """POST JSON to the hosted Floorbit, gzipped when it takes that and the body is worth it."""
@@ -199,7 +259,8 @@ class Agent:
         except Exception as exc:  # noqa: BLE001  # the hosted side gets the message, the agent goes on
             answer = {'id': call['id'], 'ok': False, 'error': str(exc)[:300] or type(exc).__name__}
         try:
-            self._check(self._post('/api/agent/v1/answers', {'answers': [answer]}))
+            if not self._link_send({'type': 'answers', 'answers': [answer]}):
+                self._check(self._post('/api/agent/v1/answers', {'answers': [answer]}))
             self.answered += 1
         except Exception as exc:  # noqa: BLE001  # the call times out on the hosted side; nothing to keep
             self.log(f'[agent] could not send the answer to {call["method"]}: {exc}')
@@ -240,6 +301,34 @@ class Agent:
 
     def stop(self):
         self._stop.set()
+        ws = self._ws
+        if ws is not None:
+            with contextlib.suppress(Exception):
+                ws.close()
+
+    def _try_link(self):
+        """True when the link was up and then dropped; False when it couldn't be opened, and the
+        long poll takes over for LINK_RETRY seconds."""
+        self.link_opened = False
+        started = time.monotonic()
+        try:
+            self.link()
+            return True
+        except Refused:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if self._stop.is_set():
+                return True
+            if self.link_opened:
+                self.log(f'[agent] the WebSocket link dropped ({exc}); connecting again')
+                if time.monotonic() - started < LINK_STEADY:
+                    # Something on the way cuts it right after the upgrade: don't spin, poll a while.
+                    self.link_after = time.monotonic() + LINK_RETRY
+                return True
+            self.log(f'[agent] no WebSocket link ({exc}); using the HTTPS long poll, '
+                     f'trying the link again in {LINK_RETRY // 60} minutes')
+            self.link_after = time.monotonic() + LINK_RETRY
+            return False
 
     def run(self):
         """Poll until stopped. Raises Refused when the key is no good."""
@@ -251,6 +340,9 @@ class Agent:
                     self.log(f'[agent] connected to {self.url} as "{hello["name"]}" '
                              f'(Floorbit {hello.get("server_version")})')
                     connected, backoff = True, 1
+                if self.link_path and time.monotonic() >= self.link_after and self._try_link():
+                    connected = False     # it dropped: say hello again, then link or poll
+                    continue
                 self.poll(self.poll_wait)
                 self.beat()
             except Refused:
