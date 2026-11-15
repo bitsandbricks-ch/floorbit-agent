@@ -1,0 +1,33 @@
+[project]
+name = "floorbit-agent"
+dynamic = ["version"]
+description = "The local agent for a hosted Floorbit."
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.11"
+# Floorbit itself isn't a package: CI and the image put a checkout of FLOORBIT_REF on the path.
+dependencies = ["requests>=2.31"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["floorbit_agent"]
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "BLE", "C4", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

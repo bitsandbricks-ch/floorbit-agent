@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.woff2 binary
+# Not part of a source archive (git archive, GitHub's release tarballs)
+.github export-ignore
+extras export-ignore
+.gitattributes export-ignore
