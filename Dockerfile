@@ -36,7 +36,7 @@ VOLUME /app/state
 USER floorbit
 ENV FLOORBIT_DATA_FILE=/app/state/agent-data.json PYTHONUNBUFFERED=1
 # The agent serves no pages: nothing to expose but the optional syslog and flow ports.
-EXPOSE 5514/udp 2055/udp
+EXPOSE 5514/udp 2055/udp 9520/tcp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=2 \
     CMD ["python", "-m", "floorbit_agent", "health"]
 CMD ["python", "-m", "floorbit_agent"]

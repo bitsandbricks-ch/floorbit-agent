@@ -46,11 +46,29 @@ python -m floorbit_agent health    # 0 when the hosted Floorbit answered in the 
 Every setting, what works through the agent and the protocol are in Floorbit's
 [docs/agent.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md).
 
+## Monitor it
+
+The agent answers on port 9520 (`FLOORBIT_AGENT_METRICS`; `compose.yml` publishes it on the
+machine's 127.0.0.1 only):
+
+- `GET /healthz`: 200 while the hosted Floorbit answered in the last two minutes, 503 otherwise,
+  with the reason and whether the WebSocket link is up.
+- `GET /metrics`: Prometheus text. Covers the link and connection, calls by method and outcome and how long
+  they took, round trips to the hosted Floorbit, reconnects and link drops, syslog received, sent,
+  dropped and waiting, and NetFlow packets and summaries sent.
+
+It's all counts and timings: no IPs, names, log lines or keys. To scrape it from another machine,
+publish the port on the LAN and set `FLOORBIT_AGENT_METRICS_TOKEN`; Prometheus then sends it as a
+bearer token (`authorization: {credentials: ...}` in the scrape config).
+
+[`grafana/floorbit-agent.json`](grafana/floorbit-agent.json) is a Grafana dashboard for these
+metrics (Dashboards > New > Import), with one row per agent (`instance`).
+
 ## How it relates to Floorbit
 
 The hosted side (the call tunnel, the `/api/agent/v1/` routes, the Local agents page) lives in
 Floorbit. This repository is the program that runs at the event. They speak a versioned protocol
-(`Floorbit-Agent-Protocol`, now 1), so they can be released apart: a Floorbit that doesn't speak the
+(`Floorbit-Agent-Protocol`, now 2), so they can be released apart: a Floorbit that doesn't speak the
 agent's protocol answers 426, and the agent stops and says so.
 
 The agent reuses Floorbit's plugins and flow collector instead of copying them. The image takes the

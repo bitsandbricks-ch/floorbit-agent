@@ -35,6 +35,7 @@ class Relay:
         self.lines = deque()
         self.dropped = 0
         self.sent = 0
+        self.received = 0
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._server = None
@@ -47,6 +48,7 @@ class Relay:
         if not raw:
             return
         with self._lock:
+            self.received += 1
             # The newest go, not the oldest: what came first explains what came after.
             if len(self.lines) >= self.backlog:
                 self.dropped += 1

@@ -195,6 +195,19 @@ class Agent:
         self._ws_lock = threading.Lock()
         self.heartbeat = None     # a file touched after each poll that got through, for `health`
         self._beat_at = 0
+        self.last_contact = 0     # time.time() the hosted Floorbit last answered (/healthz)
+        from .metrics import Metrics
+        self.metrics = Metrics()
+        self._running = 0
+        self._running_lock = threading.Lock()
+        self.metrics.collect(self._gauges)
+
+    def _gauges(self, m):
+        m.set('floorbit_agent_info', 1, {'version': self.version, 'protocol': self.protocol})
+        m.set('floorbit_agent_link_up', int(self.link_up))
+        m.set('floorbit_agent_calls_running', self._running)
+        if self.last_contact:
+            m.set('floorbit_agent_last_contact_age_seconds', round(time.time() - self.last_contact, 1))
 
     def _headers(self, json_body=False):
         h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(self.protocol)}
@@ -212,9 +225,20 @@ class Agent:
         resp.raise_for_status()
         return resp.json()
 
+    def _hosted(self, kind, request):
+        """One request to the hosted Floorbit, timed and counted for /metrics."""
+        try:
+            with self.metrics.timed('floorbit_agent_hosted_request_seconds', {'kind': kind}):
+                body = self._check(request())
+        except Exception:
+            self.metrics.inc('floorbit_agent_hosted_errors_total', {'kind': kind})
+            raise
+        self.last_contact = time.time()
+        return body
+
     def hello(self):
-        body = self._check(self.http.get(f'{self.url}/api/agent/v1/hello', headers=self._headers(),
-                                         timeout=HTTP_TIMEOUT))
+        body = self._hosted('hello', lambda: self.http.get(f'{self.url}/api/agent/v1/hello',
+                                                          headers=self._headers(), timeout=HTTP_TIMEOUT))
         self.gzip = 'gzip' in (body.get('encodings') or [])
         # A hosted Floorbit of protocol 1 says nothing of "protocols": stay on 1 and the long poll.
         known = {p for p in body.get('protocols') or [body.get('protocol') or 1] if isinstance(p, int)}
@@ -245,6 +269,7 @@ class Agent:
                 if raw is None:
                     raise TimeoutError(f'the link was quiet for {LINK_IDLE} s')
                 self.beat()
+                self.last_contact = time.time()
                 message = json.loads(raw)
                 if message.get('type') == 'calls':
                     for call in message.get('calls') or []:
@@ -281,22 +306,37 @@ class Agent:
         """One long poll; runs the calls it brings. Returns how many it got."""
         body = self._check(self.http.get(f'{self.url}/api/agent/v1/calls', params={'wait': wait},
                                          headers=self._headers(), timeout=HTTP_TIMEOUT))
+        self.last_contact = time.time()   # a long poll's round trip is its wait: not timed
         calls = body.get('calls') or []
         for call in calls:
             self._pool.submit(self._run, call)
         return len(calls)
 
     def _run(self, call):
+        # Only known method names become a label: the hosted side can't blow up /metrics.
+        method = call.get('method') if call.get('method') in METHODS else 'other'
+        with self._running_lock:
+            self._running += 1
         try:
-            result = self.execute(call['method'], call.get('args') or [])
+            with self.metrics.timed('floorbit_agent_call_seconds', {'method': method}):
+                result = self.execute(call['method'], call.get('args') or [])
             answer = {'id': call['id'], 'ok': True, 'result': result}
         except Exception as exc:  # noqa: BLE001  # the hosted side gets the message, the agent goes on
             answer = {'id': call['id'], 'ok': False, 'error': str(exc)[:300] or type(exc).__name__}
+        finally:
+            with self._running_lock:
+                self._running -= 1
+        self.metrics.inc('floorbit_agent_calls_total', {'method': method, 'outcome': 'ok' if answer['ok'] else 'error'})
         try:
-            if not self._link_send({'type': 'answers', 'answers': [answer]}):
-                self._check(self._post('/api/agent/v1/answers', {'answers': [answer]}))
+            if self._link_send({'type': 'answers', 'answers': [answer]}):
+                way = 'link'
+            else:
+                self._hosted('answers', lambda: self._post('/api/agent/v1/answers', {'answers': [answer]}))
+                way = 'https'
             self.answered += 1
+            self.metrics.inc('floorbit_agent_answers_total', {'way': way})
         except Exception as exc:  # noqa: BLE001  # the call times out on the hosted side; nothing to keep
+            self.metrics.inc('floorbit_agent_answers_total', {'way': 'failed'})
             self.log(f'[agent] could not send the answer to {call["method"]}: {exc}')
 
     def send_syslog(self, lines, dropped=0):
@@ -354,6 +394,7 @@ class Agent:
             if self._stop.is_set():
                 return True
             if self.link_opened:
+                self.metrics.inc('floorbit_agent_link_drops_total')
                 self.log(f'[agent] the WebSocket link dropped ({exc}); connecting again')
                 if time.monotonic() - started < LINK_STEADY:
                     # Something on the way cuts it right after the upgrade: don't spin, poll a while.
@@ -374,6 +415,7 @@ class Agent:
                     self.log(f'[agent] connected to {self.url} as "{hello["name"]}" '
                              f'(Floorbit {hello.get("server_version")})')
                     connected, backoff = True, 1
+                    self.metrics.set('floorbit_agent_connected', 1)
                 if self.link_path and time.monotonic() >= self.link_after and self._try_link():
                     connected = False     # it dropped: say hello again, then link or poll
                     continue
@@ -383,9 +425,11 @@ class Agent:
                 raise
             except Exception as exc:  # noqa: BLE001  # network trouble: wait and try again
                 if connected:
+                    self.metrics.inc('floorbit_agent_reconnects_total')
                     self.log(f'[agent] lost the connection to {self.url}: {exc}')
                 else:
                     self.log(f'[agent] cannot reach {self.url} ({exc}); trying again in {backoff} s')
+                self.metrics.set('floorbit_agent_connected', 0)
                 connected = False
                 self._stop.wait(backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF)
@@ -570,6 +614,10 @@ def main(argv=None):
         return 0 if check(agent, agent.execute) else 1
     relays = [start_syslog(agent, os.environ.get('FLOORBIT_AGENT_SYSLOG_PORT', '')),
               start_flows(agent, os.environ.get('FLOORBIT_AGENT_FLOWS_PORT', ''))]
+    from . import metrics as agent_metrics
+    agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None))
+    metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
+                                         HEALTHY_FOR, os.environ.get('FLOORBIT_AGENT_METRICS_TOKEN') or None)
     if False in relays:
         for relay in relays:
             if relay:
@@ -589,4 +637,6 @@ def main(argv=None):
         for relay in relays:
             if relay:
                 relay.stop()
+        if metrics_server:
+            metrics_server.shutdown()
     return 0
