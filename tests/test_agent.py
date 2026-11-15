@@ -282,3 +282,18 @@ def test_a_refused_key_on_the_link_stops_the_agent():
     finally:
         host.close()
     assert len(errors) == 1 and isinstance(errors[0], agent_mod.Refused)
+
+
+def test_a_link_that_hangs_gives_up_in_time():
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        agent_mod._within(0.2, lambda: time.sleep(5))
+    assert time.monotonic() - started < 2
+    assert agent_mod._within(1, lambda: "open") == "open"
+    with pytest.raises(ValueError):
+        agent_mod._within(1, lambda: int("x"))
+    closed = []
+    with pytest.raises(TimeoutError):
+        agent_mod._within(0.1, lambda: time.sleep(0.4) or "late link", late=closed.append)
+    time.sleep(0.6)
+    assert closed == ["late link"]                 # opened too late: closed, not left taking calls

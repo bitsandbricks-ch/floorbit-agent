@@ -19,7 +19,7 @@ network has to be reachable from outside.
 Everything goes over TLS, checked against the usual certificate authorities. Calls come over a
 WebSocket link (`wss://`) that stays open, so the agent gets them the moment the hosted side asks.
 If something on the way doesn't pass WebSockets, the agent falls back to an HTTPS long poll by
-itself and tries the link again every five minutes. Syslog and flow summaries go as HTTPS posts,
+itself (after at most 15 seconds of trying) and tries the link again every five minutes. Syslog and flow summaries go as HTTPS posts,
 gzipped. The agent key is sent with each request and kept on the hosted side only as a hash.
 
 ## Install

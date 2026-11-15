@@ -32,6 +32,7 @@ PROTOCOL = 2              # the newest agent protocol this agent speaks; the hos
 LINK_IDLE = 60            # the hosted side sends something at least every 20 s: quiet this long, it's gone
 LINK_RETRY = 300          # after the link failed, long-poll this long before trying it again
 LINK_STEADY = 30          # a link that drops sooner than this counts as failed
+LINK_CONNECT = 15         # seconds to open the link; simple-websocket has no connect timeout of its own
 POLL_WAIT = 25            # the hosted side holds a poll at most this long
 HTTP_TIMEOUT = 40         # a bit more than a poll
 MAX_BACKOFF = 60
@@ -42,6 +43,38 @@ WORKERS = 4               # calls run side by side: one slow port lookup mustn't
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
            'wifi_feeds')
+
+
+def _within(seconds, open_it, late=None):
+    """open_it(), or TimeoutError after ``seconds``: a firewall that drops the packets would
+    otherwise hold the agent for the system's TCP timeout, minutes, before it falls back.
+    What opens after the timeout goes to ``late`` (to be closed): a link nobody reads would take
+    the hosted side's calls and leave them unanswered."""
+    done, out, lock = threading.Event(), {}, threading.Lock()
+
+    def run():
+        try:
+            value = open_it()
+        except BaseException as exc:  # noqa: BLE001  # handed to the caller below
+            out['error'] = exc
+        else:
+            with lock:
+                if out.get('gave_up'):
+                    if late is not None:
+                        late(value)
+                    return
+                out['value'] = value
+        done.set()
+
+    threading.Thread(target=run, name='agent-link-open', daemon=True).start()
+    if not done.wait(seconds):
+        with lock:
+            if 'value' not in out and 'error' not in out:
+                out['gave_up'] = True
+                raise TimeoutError(f'the link did not open within {seconds} s')
+    if 'error' in out:
+        raise out['error']
+    return out['value']
 
 
 class Refused(RuntimeError):
@@ -196,8 +229,9 @@ class Agent:
         import simple_websocket
         url = 'ws' + self.url[len('http'):] + self.link_path     # https:// -> wss://
         try:
-            ws = simple_websocket.Client.connect(url, headers=self._headers(), ping_interval=25,
-                                                 max_message_size=32 * 1024 * 1024)
+            ws = _within(LINK_CONNECT, lambda: simple_websocket.Client.connect(
+                url, headers=self._headers(), ping_interval=25, max_message_size=32 * 1024 * 1024),
+                late=lambda late_ws: late_ws.close())
         except simple_websocket.ConnectionError as exc:
             if getattr(exc, 'status_code', None) in (401, 426):
                 raise Refused('The hosted Floorbit refused the agent key: it is wrong or was revoked. '
