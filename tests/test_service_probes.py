@@ -47,7 +47,8 @@ def test_probes_run_here_towards_public_and_private_addresses(probes):
 
 def test_never_this_machine_nor_other_ports(probes, monkeypatch):
     execute = floorbit_agent.local_executor(flask.Flask('test'))
-    for host in ('127.0.0.1', 'localhost', '169.254.1.1', '::1', '::ffff:127.0.0.1', '::ffff:169.254.169.254'):
+    for host in ('127.0.0.1', 'localhost', '169.254.1.1', '::1', '::ffff:127.0.0.1', '::ffff:169.254.169.254',
+                 '64:ff9b::a9fe:a9fe', '64:ff9b::7f00:1', '2002:a9fe:a9fe::1'):
         with pytest.raises(PluginError, match='may probe'):
             execute('tcp_probe', [host, 443, 5])
     with pytest.raises(PluginError, match='only probes ports'):

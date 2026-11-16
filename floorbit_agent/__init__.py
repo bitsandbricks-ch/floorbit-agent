@@ -90,6 +90,25 @@ def _unmapped(ip):
     return getattr(ip, 'ipv4_mapped', None) or ip
 
 
+def _inside(ip):
+    """The IPv4 address that NAT64 (64:ff9b::/96, 64:ff9b:1::/48) or 6to4 (2002::/16) carries in ``ip``,
+    else None. Python calls 64:ff9b:1::a9fe:a9fe private, yet on a NAT64 network it is 169.254.169.254."""
+    import ipaddress
+    if ip.version != 6:
+        return None
+    if ip.sixtofour:
+        return ip.sixtofour
+    if ip in ipaddress.ip_network('64:ff9b::/96') or ip in ipaddress.ip_network('64:ff9b:1::/48'):
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return None
+
+
+def _never(ip):
+    """This machine, link-local, unspecified or multicast, also when carried inside IPv6."""
+    return any(i is not None and (i.is_loopback or i.is_link_local or i.is_unspecified or i.is_multicast)
+               for i in (ip, _inside(ip)))
+
+
 def game_target(host, env=None):
     """The address to ask a game server at, if it may be asked. The hosted side names the host, so
     the agent only reaches private addresses (or FLOORBIT_AGENT_GAME_NETS): a hosted Floorbit that
@@ -107,7 +126,10 @@ def game_target(host, env=None):
         raise PluginError(f'The agent cannot resolve {host}.') from None
     for addr in sorted(addrs):
         ip = _unmapped(ipaddress.ip_address(addr.split('%')[0]))
-        if any(ip in net for net in nets) if nets else (ip.is_private and not (ip.is_loopback or ip.is_link_local)):
+        if _never(ip):
+            continue
+        inside = _inside(ip)
+        if any(ip in net for net in nets) if nets else (ip.is_private and (inside is None or inside.is_private)):
             return str(ip)
     raise PluginError(f'{host} is not on a network the agent may ask game servers on '
                       '(private addresses, or FLOORBIT_AGENT_GAME_NETS).')
@@ -150,10 +172,9 @@ def probe_target(host, env=None):
         raise PluginError(f'The agent cannot resolve {host}.') from None
     for addr in sorted(addrs):
         ip = _unmapped(ipaddress.ip_address(addr.split('%')[0]))
-        if nets:
-            if any(ip in net for net in nets):
-                return str(ip)
-        elif not (ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast):
+        if _never(ip):
+            continue
+        if not nets or any(ip in net for net in nets):
             return str(ip)
     raise PluginError(f'{host} is not an address the agent may probe.')
 
