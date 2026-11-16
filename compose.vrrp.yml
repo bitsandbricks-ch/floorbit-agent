@@ -1,0 +1,18 @@
+# VRRP mode: this agent shares virtual IPs with the other agents (docs/vrrp.md). Use it on top
+# of compose.yml, on every agent machine:
+#
+#   docker compose -f compose.yml -f compose.vrrp.yml up -d
+#
+# and set FLOORBIT_AGENT_VRRP_* in agent.env. keepalived in the image sets the VIPs on the
+# machine's own interface, so the agent shares the machine's network and needs NET_ADMIN.
+
+services:
+  agent:
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    # On the host network the published ports don't apply: the agent listens on the machine.
+    ports: !reset []
+    environment:
+      # On the host network 0.0.0.0 would be the LAN: keep /metrics on this machine.
+      FLOORBIT_AGENT_METRICS: ${FLOORBIT_AGENT_METRICS:-127.0.0.1:9520}

@@ -151,8 +151,9 @@ class LinkHost:
         from werkzeug.serving import make_server
 
         self.link, self.refuse_link = link, refuse_link
+        self.takes_reports = True
         self.calls = [{"id": "1", "method": "devices", "args": []}]
-        self.answers, self.via = [], []
+        self.answers, self.via, self.reports = [], [], []
         self.server = make_server("127.0.0.1", 0, self.app, threaded=True)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.server.server_port}"
@@ -176,8 +177,13 @@ class LinkHost:
             ws.send(json.dumps({"type": "hello", "name": "Spring LAN", "protocol": 2}))
             calls, self.calls = self.calls, []
             ws.send(json.dumps({"type": "calls", "calls": calls}))
-            message = json.loads(ws.receive(timeout=5))
-            self.answers += message["answers"]
+            while True:                            # like the real side: each message by its type
+                message = json.loads(ws.receive(timeout=5))
+                if message["type"] == "report":
+                    self.reports.append(("link", message["report"]))
+                elif message["type"] == "answers":
+                    self.answers += message["answers"]
+                    break
             self.via.append("link")
             ws.close()
             return Response()(environ, start_response)
@@ -193,6 +199,9 @@ class LinkHost:
             self.answers += json.loads(raw)["answers"]
             self.via.append("poll")
             return Response('{"taken": 1}', mimetype="application/json")(environ, start_response)
+        if req.path == "/api/agent/v1/report" and self.takes_reports:
+            self.reports.append(("poll", json.loads(req.get_data())["report"]))
+            return Response('{"ok": true}', mimetype="application/json")(environ, start_response)
         return Response("{}", status=404)(environ, start_response)
 
     def close(self):
@@ -297,3 +306,52 @@ def test_a_link_that_hangs_gives_up_in_time():
         agent_mod._within(0.1, lambda: time.sleep(0.4) or "late link", late=closed.append)
     time.sleep(0.6)
     assert closed == ["late link"]                 # opened too late: closed, not left taking calls
+
+
+def test_the_agent_reports_about_itself_over_the_link():
+    host = LinkHost()
+    try:
+        run_against(host, lambda: host.reports)
+    finally:
+        host.close()
+    way, report = host.reports[0]
+    assert way == "link"
+    assert set(report) == {"up_seconds", "reconnects", "link_drops", "calls_busy", "answers_failed",
+                           "syslog_received", "syslog_sent", "syslog_dropped", "syslog_backlog", "flows_packets"}
+    assert all(isinstance(v, (int, float)) and v >= 0 for v in report.values())
+
+
+def test_on_the_long_poll_the_report_is_a_post_once_per_half_minute():
+    host = LinkHost(link=False)
+    try:
+        run_against(host, lambda: len(host.reports) > 1, seconds=2)
+    finally:
+        host.close()
+    assert [way for way, _ in host.reports] == ["poll"]      # polls every 0.2 s here, reports once
+
+
+def test_an_older_hosted_floorbit_without_reports_is_asked_once():
+    host = LinkHost(link=False)
+    host.takes_reports = False
+    a = make(FakeHost())
+    import requests
+    a.http = requests.Session()
+    a.http.trust_env = False
+    a.url = host.url
+    try:
+        a.report_over_https()
+        assert a._report_https is False                      # 404: not asked again
+        a._report_at = None
+        a.report_over_https()                                # and nothing raises
+    finally:
+        host.close()
+
+
+def test_the_report_sums_busy_calls_and_failed_answers_over_methods():
+    a = make(FakeHost())
+    a.metrics.inc("floorbit_agent_calls_total", {"method": "arp", "outcome": "busy"}, by=3)
+    a.metrics.inc("floorbit_agent_calls_total", {"method": "devices", "outcome": "busy"})
+    a.metrics.inc("floorbit_agent_calls_total", {"method": "devices", "outcome": "ok"}, by=9)
+    a.metrics.inc("floorbit_agent_answers_total", {"way": "failed"}, by=2)
+    report = a.report()
+    assert report["calls_busy"] == 4 and report["answers_failed"] == 2
