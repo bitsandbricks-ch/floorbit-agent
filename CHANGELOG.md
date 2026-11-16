@@ -8,6 +8,10 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- The agent answers `dns_probe` and `tcp_probe`, so a hosted Floorbit's services view measures the event's internet lines and resolvers from the event network (bitsandbricks-ch/floorbit#471). Never towards the agent machine or link-local addresses (or only `FLOORBIT_AGENT_PROBE_NETS`); TCP probes only to ports 53, 80, 443 and 853, sending nothing.
+- The agent answers `neighbours`, what each switch sees by LLDP or CDP, for the hosted topology page (bitsandbricks-ch/floorbit#468).
+- The agent answers `game_query` and `game_rcon`, so a hosted Floorbit can watch the hall's game servers and send RCON commands from the event network (bitsandbricks-ch/floorbit#472). Only private addresses are asked, or the networks in `FLOORBIT_AGENT_GAME_NETS`; the RCON password comes with each call and is never kept or logged.
+- The agent answers `port_clients`, a switch's MAC table by port, so a hosted Floorbit can list the machines on seat ports that its patch plan doesn't explain (bitsandbricks-ch/floorbit#473).
 - A disk buffer for syslog: lines the hosted Floorbit can't take go to the state volume instead of being dropped, survive a restart, and are sent oldest first behind the live lines once it is back (at most 2 GB and 24 hours). Every line carries a stable ID so copies can be dropped.
 - VRRP mode: agents share virtual IPs through keepalived in the image (`compose.vrrp.yml`, `docs/vrrp.md`), each holding its preferred VIP while it is up and the others taking over in seconds. State in `/metrics` and the log. `scripts/vrrp_check.py` checks failover with the real keepalived in two network namespaces, also in CI.
 - Every half minute the agent sends the hosted Floorbit a short report about itself (up time, link drops, syslog and NetFlow counts, busy calls), shown on its Local agents page. Over the link, or a POST on the long poll; an older Floorbit that has no place for it is asked once.
@@ -23,3 +27,9 @@ All notable changes to this project are listed here. The format follows
 - A burst of syslog no longer loses most of its lines: one thread reads the port instead of a thread per datagram, which kept only about a fifth of a 25,000-line-a-second burst. Syslog and NetFlow ask for an 8 MB receive buffer.
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
 - `/healthz` no longer reads as unhealthy when the clock steps back.
+
+### Security
+
+- Game server queries no longer go to link-local addresses (`169.254.169.254`, where clouds keep their metadata service): Python counts them as private, so they passed the private-only check.
+- Game queries and service probes check an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it reaches, also on Python releases that don't do so themselves.
+- Game queries and service probes also check the IPv4 address inside NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) and 6to4 (`2002::/16`) addresses: Python calls `64:ff9b:1::a9fe:a9fe` private, but on a NAT64 network it is the metadata service at `169.254.169.254`. Probes now refuse this machine and link-local addresses even when `FLOORBIT_AGENT_PROBE_NETS` would allow them.
