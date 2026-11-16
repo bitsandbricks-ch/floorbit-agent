@@ -44,7 +44,7 @@ WORKERS = 3               # calls of one kind run side by side, each kind in its
 REPORT_EVERY = 30         # seconds between reports to the hosted side (its Local agents page)
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
-           'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
+           'port_clients', 'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
            'wifi_feeds')
 
 
