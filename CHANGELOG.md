@@ -20,5 +20,6 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- A burst of syslog no longer loses most of its lines: one thread reads the port instead of a thread per datagram, which kept only about a fifth of a 25,000-line-a-second burst. Syslog and NetFlow ask for an 8 MB receive buffer.
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
 - `/healthz` no longer reads as unhealthy when the clock steps back.

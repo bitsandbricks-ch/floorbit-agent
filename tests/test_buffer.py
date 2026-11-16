@@ -3,6 +3,7 @@ sent oldest first behind the live lines once the hosted Floorbit is back."""
 import json
 import os
 import threading
+import time
 
 import pytest
 
@@ -191,3 +192,23 @@ def test_metrics_count_the_buffer(tmp_path):
     assert 'floorbit_agent_buffer_records{kind="syslog"} 2' in text
     assert 'floorbit_agent_syslog_backlog 3' in text
     assert json.dumps(r.spool.oldest()[1][0])               # plain JSON on disk
+
+
+def test_a_burst_of_syslog_is_read_by_one_thread_with_room_in_the_kernel():
+    """A thread per datagram lost four in five lines of a 25,000/s burst; one reader keeps up."""
+    import socket
+    r = syslog_relay.Relay(lambda lines, d: None, 0, bind='127.0.0.1', log=lambda *_: None)
+    port = r.start()
+    try:
+        asked = r._server.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+        assert asked > 212992                      # more than Linux's usual default
+        threads = threading.active_count()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+            for n in range(500):
+                u.sendto(f'<14>line {n}'.encode(), ('127.0.0.1', port))
+        deadline = time.monotonic() + 5
+        while r.received < 500 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert r.received == 500 and threading.active_count() <= threads + 1
+    finally:
+        r.stop(flush=False)
