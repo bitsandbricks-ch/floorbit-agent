@@ -187,6 +187,6 @@ class Relay:
 
 def line_id(sender, raw):
     """The same for the same line from the same switch, whichever agent heard it. The hosted side
-    keeps one copy of an ID within a few minutes of its time (a switch's lines carry their own
-    timestamp, so a real repeat differs)."""
+    keeps one copy of an ID within ten seconds of its time (floorbit#479): a copy from another
+    agent or a batch sent again; the same text later is a real repeat."""
     return hashlib.sha256(f'{sender}\n{raw}'.encode()).hexdigest()[:24]
