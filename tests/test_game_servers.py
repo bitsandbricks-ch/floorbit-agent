@@ -48,7 +48,9 @@ def test_a_query_and_an_rcon_command_run_here(game_query):
 
 def test_only_private_addresses_unless_told_otherwise(game_query, monkeypatch):
     execute = floorbit_agent.local_executor(flask.Flask('test'))
-    for host in ('8.8.8.8', '127.0.0.1', 'localhost'):
+    for host in ('8.8.8.8', '127.0.0.1', 'localhost', '169.254.169.254', '::ffff:127.0.0.1', '::ffff:169.254.169.254',
+                 # NAT64 and 6to4 carry IPv4 inside; Python calls the first two private
+                 '64:ff9b:1::a9fe:a9fe', '2002:a9fe:a9fe::1', '64:ff9b:1::808:808'):
         with pytest.raises(PluginError, match='not on a network'):
             execute('game_query', ['tcp', host, 80])
     assert game_query.calls == []

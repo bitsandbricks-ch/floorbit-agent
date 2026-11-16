@@ -42,6 +42,10 @@ UDP and sends them on, the flows only as a summary.
   addresses, or at `FLOORBIT_AGENT_GAME_NETS` when set, never at the agent machine itself, so the
   hosted side can't use the agent to reach the internet or local ports. The host is resolved once
   and that address is used. An RCON password comes with the call and is neither kept nor logged.
+  The services' probes (`dns_probe`, `tcp_probe`) may go to public addresses, since internet lines
+  and resolvers usually are, but never to the agent machine or link-local addresses (or only to
+  `FLOORBIT_AGENT_PROBE_NETS` when set). A TCP probe only connects to port 53, 80, 443 or 853, at
+  most ten times, and sends nothing; a DNS probe sends one A query. Neither can talk to a service.
   Port actions and SSH are not part of the agent today. When they come
   (bitsandbricks-ch/floorbit#474), each will be its own method with its own checks, and its
   credentials will be sent per call and never stored on the agent.
