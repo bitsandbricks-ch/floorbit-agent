@@ -41,6 +41,7 @@ BEAT_EVERY = 10           # seconds between heartbeat writes
 HEALTHY_FOR = 120         # `health`: the last poll that got through is at most this old
 WORKERS = 3               # calls of one kind run side by side, each kind in its own pool: a hung
                           # LibreNMS lookup holds up only more of the same, never the rest
+REPORT_EVERY = 30         # seconds between reports to the hosted side (its Local agents page)
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
@@ -200,6 +201,8 @@ class Agent:
         self._beat_at = 0
         self._beat_failing = False
         self.last_contact = 0     # time.time() the hosted Floorbit last answered (/healthz)
+        self._report_at = None    # time.monotonic() of the last report; None: send one soon
+        self._report_https = True  # False once the hosted side says it has no report endpoint
         from .metrics import Metrics
         self.metrics = Metrics()
         self._running = 0
@@ -280,6 +283,8 @@ class Agent:
                         self.take(call)
                 elif message.get('type') == 'ping':
                     self._link_send({'type': 'ping'})
+                if self._report_due():
+                    self._link_send({'type': 'report', 'report': self.report()})
         finally:
             self._ws, self.link_up = None, False
             with contextlib.suppress(Exception):
@@ -295,6 +300,42 @@ class Agent:
             return True
         except Exception:  # noqa: BLE001  # the link dropped: the caller sends it over HTTPS
             return False
+
+    def report(self):
+        """The agent's own numbers for the hosted Local agents page: a summary of /metrics."""
+        m = self.metrics
+        m.refresh()
+        return {
+            'up_seconds': round(time.time() - m.started),
+            'reconnects': m.total('floorbit_agent_reconnects_total'),
+            'link_drops': m.total('floorbit_agent_link_drops_total'),
+            'calls_busy': m.total('floorbit_agent_calls_total', outcome='busy'),
+            'answers_failed': m.total('floorbit_agent_answers_total', way='failed'),
+            'syslog_received': m.get('floorbit_agent_syslog_received_total'),
+            'syslog_sent': m.get('floorbit_agent_syslog_sent_total'),
+            'syslog_dropped': m.get('floorbit_agent_syslog_dropped_total'),
+            'syslog_backlog': m.get('floorbit_agent_syslog_backlog'),
+            'flows_packets': m.get('floorbit_agent_flows_packets_total'),
+        }
+
+    def _report_due(self, now=None):
+        now = time.monotonic() if now is None else now
+        if self._report_at is not None and now - self._report_at < REPORT_EVERY:
+            return False
+        self._report_at = now
+        return True
+
+    def report_over_https(self):
+        """On the long poll the report is a POST of its own. A hosted Floorbit from before reports
+        answers 404: stop asking it. Never fatal: the report is only for show."""
+        if not self._report_https or not self._report_due():
+            return
+        try:
+            resp = self._post('/api/agent/v1/report', {'report': self.report()})
+            if resp.status_code == 404:
+                self._report_https = False
+        except Exception:  # noqa: BLE001  # the next poll says whether the hosted side is away
+            pass
 
     def _post(self, path, payload):
         """POST JSON to the hosted Floorbit, gzipped when it takes that and the body is worth it."""
@@ -462,6 +503,7 @@ class Agent:
                     continue
                 self.poll(self.poll_wait)
                 self.beat()
+                self.report_over_https()
             except Refused:
                 raise
             except Exception as exc:  # noqa: BLE001  # network trouble: wait and try again

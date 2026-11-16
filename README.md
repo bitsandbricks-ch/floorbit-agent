@@ -61,6 +61,9 @@ It's all counts and timings: no IPs, names, log lines or keys. To scrape it from
 publish the port on the LAN and set `FLOORBIT_AGENT_METRICS_TOKEN` (it guards `/metrics` only); Prometheus then sends it as a
 bearer token (`authorization: {credentials: ...}` in the scrape config).
 
+Without Prometheus, the hosted Floorbit's Local agents page shows a summary of the same numbers:
+the agent sends it every half minute.
+
 [`grafana/floorbit-agent.json`](grafana/floorbit-agent.json) is a Grafana dashboard for these
 metrics (Dashboards > New > Import), with one row per agent (`instance`).
 

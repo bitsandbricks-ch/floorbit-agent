@@ -57,6 +57,8 @@ UDP and sends them on, the flows only as a summary.
   ports on the management network or limit them with a firewall rule.
 - **Flood the UDP ports:** the syslog backlog has a fixed size, the newest lines are dropped and
   counted (`floorbit_agent_syslog_dropped_total`), and memory stays bounded.
+- **Read the report:** the half-minute report to the hosted Floorbit carries the same kind of counts
+  as `/metrics`, nothing more.
 - **Read `/metrics`:** it is only counts and timings, with no IPs, names, log lines or keys. When
   the port is reachable from the LAN, set `FLOORBIT_AGENT_METRICS_TOKEN`. `/healthz` stays open on
   purpose: it says only up or down, the link and how long ago.

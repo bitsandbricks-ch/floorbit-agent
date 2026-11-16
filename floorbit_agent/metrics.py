@@ -105,13 +105,23 @@ class Metrics:
         """``fn(metrics)`` runs before each scrape, to set gauges from live objects."""
         self._collectors.append(fn)
 
-    def render(self):
+    def total(self, name, **match):
+        """The sum of a metric over all its labels, or over those matching ``match``."""
+        with self._lock:
+            return sum(v for (n, labels), v in self._values.items()
+                       if n == name and all(dict(labels).get(k) == want for k, want in match.items()))
+
+    def refresh(self):
+        """Run the collectors, so gauges read now."""
         for fn in list(self._collectors):
             try:
                 fn(self)
             except Exception:  # noqa: BLE001  # one broken collector must not hide the rest
                 self.inc('floorbit_agent_collector_errors_total')
         self.set('floorbit_agent_up_seconds', round(time.time() - self.started, 1))
+
+    def render(self):
+        self.refresh()
         with self._lock:
             values, hists = dict(self._values), {k: list(v) for k, v in self._hist.items()}
         lines, names = [], sorted({k[0] for k in values} | {k[0] for k in hists})
