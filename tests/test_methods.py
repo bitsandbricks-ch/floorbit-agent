@@ -31,3 +31,10 @@ def test_a_call_it_does_not_know_is_refused(monkeypatch):
     monkeypatch.setattr(sources, 'registry', Registry())
     with pytest.raises(PluginError):
         floorbit_agent.local_executor(flask.Flask('test'))('delete_everything', [])
+
+
+def test_lldp_neighbours_go_to_the_plugin(monkeypatch):
+    registry = Registry()
+    monkeypatch.setattr(sources, 'registry', registry)
+    floorbit_agent.local_executor(flask.Flask('test'))('neighbours', ['sw-a-01'])
+    assert registry.calls == [('librenms', 'neighbours', ('sw-a-01',))]
