@@ -442,6 +442,8 @@ class Agent:
             'syslog_dropped': m.get('floorbit_agent_syslog_dropped_total'),
             'syslog_backlog': m.get('floorbit_agent_syslog_backlog'),
             'flows_packets': m.get('floorbit_agent_flows_packets_total'),
+            'captive_shown': m.get('floorbit_agent_captive_answers_total', {'answer': 'captive'}),
+            'captive_done': m.get('floorbit_agent_captive_answers_total', {'answer': 'done'}),
         }
 
     def _report_due(self, now=None):
@@ -908,7 +910,8 @@ def main(argv=None):
               start_flows(agent, os.environ.get('FLOORBIT_AGENT_FLOWS_PORT', '')),
               start_captive(agent, os.environ)]
     from . import metrics as agent_metrics
-    agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None))
+    agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None,
+                                                        relays[2].api if relays[2] else None))
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
                                          HEALTHY_FOR, os.environ.get('FLOORBIT_AGENT_METRICS_TOKEN') or None)
     keepalived = start_vrrp(agent, os.environ)
