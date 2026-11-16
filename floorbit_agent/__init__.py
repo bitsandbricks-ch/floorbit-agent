@@ -44,7 +44,7 @@ WORKERS = 3               # calls of one kind run side by side, each kind in its
 REPORT_EVERY = 30         # seconds between reports to the hosted side (its Local agents page)
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
-           'port_clients', 'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
+           'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
            'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe')
 
 
@@ -214,6 +214,8 @@ def local_executor(app):
                 return inventory_feeds(registry)
             if method == 'cable_feeds':
                 return cable_feeds(registry)
+            if method == 'firewall_feeds':
+                return firewall_feeds(registry)
             if method == 'wifi_feeds':
                 return wifi_feeds(registry)
             if method == 'dns_feeds':
@@ -279,6 +281,12 @@ def cable_feeds(registry):
     """Every plugin that's on here and knows cables (NetBox), each with its cables or its error."""
     from floorbit import cables
     return _feeds(registry, cables.sources(registry) if registry is not None else [], 'cables')
+
+
+def firewall_feeds(registry):
+    """Every plugin here that lists firewall ranges (NetBox prefixes), each with its ranges or its error."""
+    from floorbit import firewalls
+    return _feeds(registry, firewalls.import_sources(registry) if registry is not None else [], 'firewall_ranges')
 
 
 def _feeds(registry, specs, method):
