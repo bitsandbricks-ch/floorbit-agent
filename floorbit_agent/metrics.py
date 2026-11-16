@@ -5,7 +5,8 @@ Floorbit answered in the last HEALTHY_FOR seconds and 503 otherwise, with the re
 
 Listens on ``FLOORBIT_AGENT_METRICS`` (default ``0.0.0.0:9520`` inside the container; the compose
 file publishes it on the host's 127.0.0.1 only). ``off`` turns it off. With
-``FLOORBIT_AGENT_METRICS_TOKEN`` set, both need ``Authorization: Bearer <token>``.
+``FLOORBIT_AGENT_METRICS_TOKEN`` set, ``/metrics`` needs ``Authorization: Bearer <token>``;
+``/healthz`` never does, so local checks need nothing.
 
 Only counts and timings: no IPs, names, log lines or keys, so it is safe to scrape from anywhere the
 crew trusts.
@@ -201,17 +202,20 @@ def serve(metrics, agent, address, healthy_for, token=None, log=print):
             self.wfile.write(data)
 
         def do_GET(self):  # the name http.server asks for
+            path = self.path.split('?', 1)[0]
+            if path == '/healthz':
+                # Never behind the token: local checks (Docker, keepalived, a curl) just ask. It
+                # says only up or not, the link and how long ago.
+                ok, details = health_of(agent, healthy_for)
+                self._send(200 if ok else 503, json.dumps(details) + '\n', 'application/json')
+                return
             if token:
                 given = self.headers.get('Authorization', '')
                 if not hmac.compare_digest(given.encode(), f'Bearer {token}'.encode()):
                     self._send(401, '{"error": "token required"}\n', 'application/json')
                     return
-            path = self.path.split('?', 1)[0]
             if path == '/metrics':
                 self._send(200, metrics.render(), 'text/plain; version=0.0.4; charset=utf-8')
-            elif path == '/healthz':
-                ok, details = health_of(agent, healthy_for)
-                self._send(200 if ok else 503, json.dumps(details) + '\n', 'application/json')
             else:
                 self._send(404, '{"error": "not found"}\n', 'application/json')
 

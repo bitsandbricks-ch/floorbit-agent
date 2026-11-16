@@ -147,6 +147,7 @@ def test_the_endpoint_with_a_token(served):
     assert _get(base + '/metrics')[0] == 401
     assert _get(base + '/metrics', 'wrong')[0] == 401
     assert _get(base + '/metrics', 'scrape-me')[0] == 200
+    assert _get(base + '/healthz')[0] == 503      # no token needed: up or not, nothing else
 
 
 @pytest.mark.parametrize('address', ['off', '', 'no-port-here'])
