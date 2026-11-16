@@ -44,8 +44,8 @@ WORKERS = 3               # calls of one kind run side by side, each kind in its
 REPORT_EVERY = 30         # seconds between reports to the hosted side (its Local agents page)
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
-           'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
-           'wifi_feeds')
+           'port_clients', 'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
+           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe')
 
 
 def _within(seconds, open_it, late=None):
@@ -84,6 +84,119 @@ class Refused(RuntimeError):
     """The hosted Floorbit refused the key: retrying won't help."""
 
 
+def _unmapped(ip):
+    """::ffff:127.0.0.1 reaches 127.0.0.1, but not every Python release calls it loopback (or
+    ::ffff:169.254.0.1 link-local): check the IPv4 address it stands for."""
+    return getattr(ip, 'ipv4_mapped', None) or ip
+
+
+def _inside(ip):
+    """The IPv4 address that NAT64 (64:ff9b::/96, 64:ff9b:1::/48) or 6to4 (2002::/16) carries in ``ip``,
+    else None. Python calls 64:ff9b:1::a9fe:a9fe private, yet on a NAT64 network it is 169.254.169.254."""
+    import ipaddress
+    if ip.version != 6:
+        return None
+    if ip.sixtofour:
+        return ip.sixtofour
+    if ip in ipaddress.ip_network('64:ff9b::/96') or ip in ipaddress.ip_network('64:ff9b:1::/48'):
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return None
+
+
+def _never(ip):
+    """This machine, link-local, unspecified or multicast, also when carried inside IPv6."""
+    return any(i is not None and (i.is_loopback or i.is_link_local or i.is_unspecified or i.is_multicast)
+               for i in (ip, _inside(ip)))
+
+
+def game_target(host, env=None):
+    """The address to ask a game server at, if it may be asked. The hosted side names the host, so
+    the agent only reaches private addresses (or FLOORBIT_AGENT_GAME_NETS): a hosted Floorbit that
+    was taken over can't use the agent to reach the internet or this machine's own ports."""
+    import ipaddress
+    import socket
+
+    from floorbit.plugins.base import PluginError
+    env = os.environ if env is None else env
+    nets = [ipaddress.ip_network(n.strip(), strict=False)
+            for n in (env.get('FLOORBIT_AGENT_GAME_NETS') or '').split(',') if n.strip()]
+    try:
+        addrs = {info[4][0] for info in socket.getaddrinfo(str(host), None, proto=socket.IPPROTO_TCP)}
+    except (OSError, UnicodeError):
+        raise PluginError(f'The agent cannot resolve {host}.') from None
+    for addr in sorted(addrs):
+        ip = _unmapped(ipaddress.ip_address(addr.split('%')[0]))
+        if _never(ip):
+            continue
+        inside = _inside(ip)
+        if any(ip in net for net in nets) if nets else (ip.is_private and (inside is None or inside.is_private)):
+            return str(ip)
+    raise PluginError(f'{host} is not on a network the agent may ask game servers on '
+                      '(private addresses, or FLOORBIT_AGENT_GAME_NETS).')
+
+
+def game_call(method, args, env=None):
+    """A game server query or RCON command (floorbit/game_query.py), from the event network."""
+    from floorbit import game_query
+    from floorbit.plugins.base import PluginError
+    if method == 'game_query':
+        protocol, host, port = args
+        target = game_target(host, env)
+        try:
+            return game_query.query(protocol, target, int(port))
+        except game_query.QueryError as exc:
+            raise PluginError(str(exc)) from None
+    host, port, password, command = args
+    target = game_target(host, env)
+    try:
+        return game_query.rcon(target, int(port), password, command)
+    except game_query.QueryError as exc:
+        raise PluginError(str(exc)) from None
+
+
+def probe_target(host, env=None):
+    """The address to probe, if it may be probed. Unlike game servers, internet lines and resolvers
+    are often public, so any address goes except this machine's own and link-local ones (or only
+    FLOORBIT_AGENT_PROBE_NETS when set). A probe only connects to 53, 80, 443 or 853 and sends
+    nothing, or sends one DNS query, so it can't be used to talk to a service."""
+    import ipaddress
+    import socket
+
+    from floorbit.plugins.base import PluginError
+    env = os.environ if env is None else env
+    nets = [ipaddress.ip_network(n.strip(), strict=False)
+            for n in (env.get('FLOORBIT_AGENT_PROBE_NETS') or '').split(',') if n.strip()]
+    try:
+        addrs = {info[4][0] for info in socket.getaddrinfo(str(host), None, proto=socket.IPPROTO_TCP)}
+    except (OSError, UnicodeError):
+        raise PluginError(f'The agent cannot resolve {host}.') from None
+    for addr in sorted(addrs):
+        ip = _unmapped(ipaddress.ip_address(addr.split('%')[0]))
+        if _never(ip):
+            continue
+        if not nets or any(ip in net for net in nets):
+            return str(ip)
+    raise PluginError(f'{host} is not an address the agent may probe.')
+
+
+def probe_call(method, args, env=None):
+    """A DNS or TCP probe for the services view (floorbit/probes.py), from the event network."""
+    from floorbit import probes
+    from floorbit.plugins.base import PluginError
+    try:
+        if method == 'dns_probe':
+            server, name = args
+            return probes.dns(probe_target(server, env), str(name))
+        host, port, count = args
+        if int(port) not in probes.PROBE_PORTS:
+            raise PluginError(f'The agent only probes ports {", ".join(map(str, probes.PROBE_PORTS))}.')
+        return probes.tcp(probe_target(host, env), int(port), min(int(count), probes.MAX_COUNT))
+    except probes.ProbeError as exc:
+        raise PluginError(str(exc)) from None
+    except (TypeError, ValueError):
+        raise PluginError('The probe was asked for wrongly.') from None
+
+
 def local_executor(app):
     """Run a call against this machine's monitoring plugin, as the hosted Floorbit would locally."""
     def execute(method, args):
@@ -91,6 +204,10 @@ def local_executor(app):
         from floorbit.plugins.base import PluginError
         if method not in METHODS:
             raise PluginError(f'{method} is not something the agent answers')
+        if method in ('game_query', 'game_rcon'):
+            return game_call(method, args)
+        if method in ('dns_probe', 'tcp_probe'):
+            return probe_call(method, args)
         with app.app_context():
             registry = sources.registry
             if method == 'inventory_feeds':
@@ -607,12 +724,39 @@ def start_syslog(agent, port, out=print):
     if not port:
         return None
     try:
-        relay = Relay(agent.send_syslog, int(port), os.environ.get('FLOORBIT_AGENT_SYSLOG_BIND') or '0.0.0.0', log=out)
+        relay = Relay(agent.send_syslog, int(port), os.environ.get('FLOORBIT_AGENT_SYSLOG_BIND') or '0.0.0.0', log=out,
+                      spool=open_buffer('syslog', os.environ, out))
         relay.start()
     except (ValueError, OSError, OverflowError) as exc:
         out(f'[agent] cannot listen for syslog on "{port}": {exc}')
         return False
     return relay
+
+
+def open_buffer(kind, env, out=print):
+    """The disk buffer for one kind of data (spool.py), in the state volume next to the agent's
+    settings: FLOORBIT_AGENT_BUFFER_DIR, _MAX_MB (2048) and _MAX_HOURS (24); _MAX_MB=0 turns it
+    off. None when it is off or its folder can't be made (the relay then keeps lines in memory)."""
+    from .spool import Spool
+    try:
+        max_mb = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_MB') or 2048)
+        max_hours = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_HOURS') or 24)
+    except ValueError:
+        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers; no disk buffer')
+        return None
+    if max_mb <= 0:
+        return None
+    base = env.get('FLOORBIT_AGENT_BUFFER_DIR') or os.path.join(
+        os.path.dirname(os.path.abspath(env.get('FLOORBIT_DATA_FILE') or 'agent-data.json')), 'buffer')
+    try:
+        spool = Spool(os.path.join(base, kind), max_bytes=int(max_mb * 1024 ** 2), max_age=max_hours * 3600, log=out)
+    except OSError as exc:
+        out(f'[agent] no disk buffer for {kind} in {base}: {exc}')
+        return None
+    if len(spool):
+        out(f'[agent] {len(spool)} {kind} records in the disk buffer from before: sending them once the '
+            'hosted Floorbit takes them')
+    return spool
 
 
 def start_flows(agent, port, out=print):

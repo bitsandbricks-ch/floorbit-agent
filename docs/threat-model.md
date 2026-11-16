@@ -18,7 +18,7 @@ UDP and sends them on, the flows only as a summary.
 | The agent key (`fba_<id>_<secret>`) | `agent.env` on the agent machine; only its SHA-256 on the hosted side |
 | LibreNMS and NetBox tokens | `agent.env`; they never leave the agent machine |
 | The event network's layout: switches, ports, ARP (IP ↔ MAC) | LibreNMS/NetBox; passes through the agent as answers |
-| Syslog lines | from the switches, through the agent, to the hosted Logs page |
+| Syslog lines | from the switches, through the agent, to the hosted Logs page; while the uplink is down, in the agent's disk buffer (`/app/state/buffer`, readable by the agent's user only, at most 24 h) |
 | Traffic data | NetFlow stays on the agent; only aggregates leave it (seat totals, protocol mix, 5+ seats rule) |
 | The agent machine itself | the event network |
 
@@ -38,7 +38,15 @@ UDP and sends them on, the flows only as a summary.
 - **Make the agent do something else:** the hosted side can only ask the methods in
   `floorbit_agent.METHODS` (switches, ports, ARP, inventory, health and DNS feeds). Anything else is
   refused on the agent, and unknown methods don't even become a metrics label. There is no "run
-  this command" call. Port actions and SSH are not part of the agent today. When they come
+  this command" call. Game servers (`game_query`, `game_rcon`) are asked only at private
+  addresses, or at `FLOORBIT_AGENT_GAME_NETS` when set, never at the agent machine itself, so the
+  hosted side can't use the agent to reach the internet or local ports. The host is resolved once
+  and that address is used. An RCON password comes with the call and is neither kept nor logged.
+  The services' probes (`dns_probe`, `tcp_probe`) may go to public addresses, since internet lines
+  and resolvers usually are, but never to the agent machine or link-local addresses (or only to
+  `FLOORBIT_AGENT_PROBE_NETS` when set). A TCP probe only connects to port 53, 80, 443 or 853, at
+  most ten times, and sends nothing; a DNS probe sends one A query. Neither can talk to a service.
+  Port actions and SSH are not part of the agent today. When they come
   (bitsandbricks-ch/floorbit#474), each will be its own method with its own checks, and its
   credentials will be sent per call and never stored on the agent.
 - **Flood the agent:** at most `WORKERS` calls of one kind run at a time, and at most `MAX_WAITING`

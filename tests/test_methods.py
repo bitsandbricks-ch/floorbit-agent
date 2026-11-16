@@ -1,0 +1,40 @@
+"""Which monitoring calls the agent answers, and that it hands them to its own plugin."""
+import flask
+import pytest
+from floorbit import sources
+from floorbit.plugins.base import PluginError
+
+import floorbit_agent
+
+
+class Registry:
+    def __init__(self):
+        self.calls = []
+
+    def monitoring_source(self):
+        return 'librenms'
+
+    def call(self, spec, method, *args):
+        self.calls.append((spec, method, args))
+        return [{'port': 'Gi1/0/7', 'mac': '02:00:00:00:00:07', 'vlan': 3}]
+
+
+def test_the_mac_table_call_goes_to_the_plugin(monkeypatch):
+    registry = Registry()
+    monkeypatch.setattr(sources, 'registry', registry)
+    execute = floorbit_agent.local_executor(flask.Flask('test'))
+    assert execute('port_clients', ['sw-a-01'])[0]['port'] == 'Gi1/0/7'
+    assert registry.calls == [('librenms', 'port_clients', ('sw-a-01',))]
+
+
+def test_a_call_it_does_not_know_is_refused(monkeypatch):
+    monkeypatch.setattr(sources, 'registry', Registry())
+    with pytest.raises(PluginError):
+        floorbit_agent.local_executor(flask.Flask('test'))('delete_everything', [])
+
+
+def test_lldp_neighbours_go_to_the_plugin(monkeypatch):
+    registry = Registry()
+    monkeypatch.setattr(sources, 'registry', registry)
+    floorbit_agent.local_executor(flask.Flask('test'))('neighbours', ['sw-a-01'])
+    assert registry.calls == [('librenms', 'neighbours', ('sw-a-01',))]

@@ -40,9 +40,12 @@ HELP = {
     'floorbit_agent_calls_running': ('gauge', 'Calls running right now.'),
     'floorbit_agent_syslog_received_total': ('counter', 'Syslog lines received from the event network.'),
     'floorbit_agent_syslog_sent_total': ('counter', 'Syslog lines sent to the hosted Floorbit.'),
-    'floorbit_agent_syslog_dropped_total': ('counter', 'Syslog lines dropped because the backlog was full.'),
-    'floorbit_agent_syslog_backlog': ('gauge', 'Syslog lines waiting to be sent.'),
+    'floorbit_agent_syslog_dropped_total': ('counter', 'Syslog lines dropped: memory full, or past the buffer limits.'),
+    'floorbit_agent_syslog_backlog': ('gauge', 'Syslog lines waiting to be sent, in memory and in the disk buffer.'),
     'floorbit_agent_syslog_failing': ('gauge', '1 while sending syslog to the hosted Floorbit fails.'),
+    'floorbit_agent_buffer_records': ('gauge', 'Records waiting in the disk buffer, by kind.'),
+    'floorbit_agent_buffer_bytes': ('gauge', 'Size of the disk buffer, by kind.'),
+    'floorbit_agent_syslog_replayed_total': ('counter', 'Syslog lines sent from the disk buffer.'),
     'floorbit_agent_vrrp_running': ('gauge', '1 while keepalived runs (VRRP mode).'),
     'floorbit_agent_vrrp_master': ('gauge', '1 while this agent holds the virtual IP.'),
     'floorbit_agent_flows_packets_total': ('counter', 'NetFlow/IPFIX packets received from the event network.'),
@@ -166,8 +169,13 @@ def relay_collector(syslog=None, flows=None):
         if syslog:
             m.set('floorbit_agent_syslog_received_total', getattr(syslog, 'received', 0))
             m.set('floorbit_agent_syslog_sent_total', syslog.sent)
-            m.set('floorbit_agent_syslog_dropped_total', syslog.dropped)
-            m.set('floorbit_agent_syslog_backlog', len(syslog.lines))
+            m.set('floorbit_agent_syslog_dropped_total', getattr(syslog, 'all_dropped', syslog.dropped))
+            spool = getattr(syslog, 'spool', None)
+            if spool is not None:
+                m.set('floorbit_agent_buffer_records', len(spool), {'kind': 'syslog'})
+                m.set('floorbit_agent_buffer_bytes', spool.size, {'kind': 'syslog'})
+                m.set('floorbit_agent_syslog_replayed_total', syslog.replayed)
+            m.set('floorbit_agent_syslog_backlog', len(syslog.lines) + getattr(syslog, 'buffered', 0))
             m.set('floorbit_agent_syslog_failing', int(bool(syslog._failing)))
         if flows:
             m.set('floorbit_agent_flows_packets_total', getattr(flows, 'packets', 0))
