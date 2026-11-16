@@ -630,6 +630,30 @@ def start_flows(agent, port, out=print):
     return relay
 
 
+def start_vrrp(agent, env, out=print):
+    """keepalived for the VIPs in FLOORBIT_AGENT_VRRP_VIPS (vrrp.py). None when VRRP is off, False
+    when it is set up wrong or can't start (the agent then stops: a VIP nobody holds is worse
+    than an agent that says why)."""
+    from . import vrrp
+    try:
+        settings = vrrp.settings_from(env)
+    except ValueError as exc:
+        out(f'[vrrp] {exc}')
+        return False
+    if settings is None:
+        return None
+    address = env.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520').strip()
+    check = vrrp.local_check(address) if address.lower() not in ('', 'off') else None
+    keepalived = vrrp.Keepalived(settings, agent.metrics, log=out, healthy=check)
+    try:
+        keepalived.start()
+    except (RuntimeError, OSError) as exc:
+        out(f'[vrrp] {exc}')
+        keepalived.stop()
+        return False
+    return keepalived
+
+
 def _stop_on_term(_signum, _frame):
     raise KeyboardInterrupt
 
@@ -701,10 +725,13 @@ def main(argv=None):
     agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None))
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
                                          HEALTHY_FOR, os.environ.get('FLOORBIT_AGENT_METRICS_TOKEN') or None)
-    if False in relays:
+    keepalived = start_vrrp(agent, os.environ)
+    if False in relays or keepalived is False:
         for relay in relays:
             if relay:
                 relay.stop()
+        if metrics_server:
+            metrics_server.shutdown()
         return 2
     # docker stop sends SIGTERM: leave the way Ctrl+C does, so the syslog backlog goes out first.
     signal.signal(signal.SIGTERM, _stop_on_term)
@@ -717,6 +744,8 @@ def main(argv=None):
         agent.stop()
         print('[agent] stopping')
     finally:
+        if keepalived:
+            keepalived.stop()
         for relay in relays:
             if relay:
                 relay.stop()
