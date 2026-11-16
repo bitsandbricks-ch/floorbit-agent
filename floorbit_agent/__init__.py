@@ -39,7 +39,9 @@ MAX_BACKOFF = 60
 GZIP_FROM = 2048          # bytes: smaller bodies aren't worth packing
 BEAT_EVERY = 10           # seconds between heartbeat writes
 HEALTHY_FOR = 120         # `health`: the last poll that got through is at most this old
-WORKERS = 4               # calls run side by side: one slow port lookup mustn't hold up the rest
+WORKERS = 3               # calls of one kind run side by side, each kind in its own pool: a hung
+                          # LibreNMS lookup holds up only more of the same, never the rest
+MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
            'wifi_feeds')
@@ -181,7 +183,8 @@ class Agent:
         self.http = http or requests.Session()
         self.version = version
         self.log = log
-        self._pool = ThreadPoolExecutor(WORKERS)
+        self._pools = {}          # method -> its own ThreadPoolExecutor
+        self._waiting = {}        # method -> calls taken but not answered yet
         self._stop = threading.Event()
         self.answered = 0
         self.poll_wait = POLL_WAIT
@@ -195,6 +198,7 @@ class Agent:
         self._ws_lock = threading.Lock()
         self.heartbeat = None     # a file touched after each poll that got through, for `health`
         self._beat_at = 0
+        self._beat_failing = False
         self.last_contact = 0     # time.time() the hosted Floorbit last answered (/healthz)
         from .metrics import Metrics
         self.metrics = Metrics()
@@ -273,7 +277,7 @@ class Agent:
                 message = json.loads(raw)
                 if message.get('type') == 'calls':
                     for call in message.get('calls') or []:
-                        self._pool.submit(self._run, call)
+                        self.take(call)
                 elif message.get('type') == 'ping':
                     self._link_send({'type': 'ping'})
         finally:
@@ -309,12 +313,38 @@ class Agent:
         self.last_contact = time.time()   # a long poll's round trip is its wait: not timed
         calls = body.get('calls') or []
         for call in calls:
-            self._pool.submit(self._run, call)
+            self.take(call)
         return len(calls)
+
+    def take(self, call):
+        """Queue one call in its method's pool, or answer "busy" when too many of that kind wait."""
+        method = call.get('method') if call.get('method') in METHODS else 'other'
+        with self._running_lock:
+            if self._waiting.get(method, 0) >= MAX_WAITING:
+                busy = True
+            else:
+                busy = False
+                self._waiting[method] = self._waiting.get(method, 0) + 1
+                pool = self._pools.get(method)
+                if pool is None:
+                    pool = self._pools[method] = ThreadPoolExecutor(WORKERS, thread_name_prefix=f'agent-{method}')
+        if busy:
+            self.metrics.inc('floorbit_agent_calls_total', {'method': method, 'outcome': 'busy'})
+            self._answer(call, {'id': call.get('id'), 'ok': False,
+                                'error': f'The agent is busy: {MAX_WAITING} {method} calls are still waiting.'})
+            return
+        pool.submit(self._run, call)
 
     def _run(self, call):
         # Only known method names become a label: the hosted side can't blow up /metrics.
         method = call.get('method') if call.get('method') in METHODS else 'other'
+        try:
+            self._run_one(call, method)
+        finally:
+            with self._running_lock:
+                self._waiting[method] = max(0, self._waiting.get(method, 0) - 1)
+
+    def _run_one(self, call, method):
         with self._running_lock:
             self._running += 1
         try:
@@ -327,6 +357,9 @@ class Agent:
             with self._running_lock:
                 self._running -= 1
         self.metrics.inc('floorbit_agent_calls_total', {'method': method, 'outcome': 'ok' if answer['ok'] else 'error'})
+        self._answer(call, answer)
+
+    def _answer(self, call, answer):
         try:
             if self._link_send({'type': 'answers', 'answers': [answer]}):
                 way = 'link'
@@ -369,12 +402,20 @@ class Agent:
             with open(self.heartbeat, 'w', encoding='utf-8') as f:
                 f.write(f'{now:.0f}\n')
             self._beat_at = now
+            if self._beat_failing:
+                self.log(f'[agent] the heartbeat file {self.heartbeat} can be written again')
+            self._beat_failing = False
         except OSError as exc:
-            self.log(f'[agent] cannot write the heartbeat file {self.heartbeat}: {exc}')
-            self.heartbeat = None
+            # A full disk can pass: keep trying, say it once.
+            if not self._beat_failing:
+                self.log(f'[agent] cannot write the heartbeat file {self.heartbeat}: {exc}')
+            self._beat_failing = True
+            self._beat_at = now      # and try again in BEAT_EVERY, not on every message
 
     def stop(self):
         self._stop.set()
+        for pool in list(self._pools.values()):
+            pool.shutdown(wait=False, cancel_futures=True)
         ws = self._ws
         if ws is not None:
             with contextlib.suppress(Exception):

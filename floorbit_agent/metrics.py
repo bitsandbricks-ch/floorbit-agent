@@ -31,7 +31,8 @@ HELP = {
     'floorbit_agent_last_contact_age_seconds': ('gauge', 'Seconds since the hosted Floorbit last answered.'),
     'floorbit_agent_reconnects_total': ('counter', 'Times the connection to the hosted Floorbit was lost.'),
     'floorbit_agent_link_drops_total': ('counter', 'Times the WebSocket link dropped after it was open.'),
-    'floorbit_agent_calls_total': ('counter', 'Calls from the hosted Floorbit, by method and outcome (ok, error).'),
+    'floorbit_agent_calls_total': ('counter',
+                                   'Calls from the hosted Floorbit by method and outcome (ok, error, busy).'),
     'floorbit_agent_call_seconds': ('histogram', 'How long a call took to run here, by method.'),
     'floorbit_agent_answers_total': ('counter', 'Answers sent back, by way (link, https) or failed.'),
     'floorbit_agent_hosted_request_seconds': ('histogram', 'Round trip of requests to the hosted Floorbit, by kind.'),
@@ -167,7 +168,8 @@ def health_of(agent, healthy_for, now=None):
     """(ok, details) for /healthz: has the hosted Floorbit answered lately?"""
     now = time.time() if now is None else now
     last = getattr(agent, 'last_contact', 0) or 0
-    age = now - last if last else None
+    # max(0, …): a clock that stepped back (NTP at boot) must not read as "from the future".
+    age = max(0.0, now - last) if last else None
     ok = age is not None and age <= healthy_for
     details = {'ok': ok, 'link': 'websocket' if agent.link_up else ('poll' if ok else 'none'),
                'protocol': agent.protocol,

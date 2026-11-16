@@ -64,6 +64,11 @@ bearer token (`authorization: {credentials: ...}` in the scrape config).
 [`grafana/floorbit-agent.json`](grafana/floorbit-agent.json) is a Grafana dashboard for these
 metrics (Dashboards > New > Import), with one row per agent (`instance`).
 
+## Security
+
+[docs/threat-model.md](docs/threat-model.md) says what the agent protects, from whom, and how;
+[SECURITY.md](SECURITY.md) how to report a problem.
+
 ## How it relates to Floorbit
 
 The hosted side (the call tunnel, the `/api/agent/v1/` routes, the Local agents page) lives in
