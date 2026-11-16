@@ -43,6 +43,8 @@ HELP = {
     'floorbit_agent_syslog_dropped_total': ('counter', 'Syslog lines dropped because the backlog was full.'),
     'floorbit_agent_syslog_backlog': ('gauge', 'Syslog lines waiting to be sent.'),
     'floorbit_agent_syslog_failing': ('gauge', '1 while sending syslog to the hosted Floorbit fails.'),
+    'floorbit_agent_vrrp_running': ('gauge', '1 while keepalived runs (VRRP mode).'),
+    'floorbit_agent_vrrp_master': ('gauge', '1 while this agent holds the virtual IP.'),
     'floorbit_agent_flows_packets_total': ('counter', 'NetFlow/IPFIX packets received from the event network.'),
     'floorbit_agent_flows_snapshots_sent_total': ('counter', 'Flow snapshots sent to the hosted Floorbit.'),
     'floorbit_agent_flows_failing': ('gauge', '1 while sending flow snapshots fails.'),

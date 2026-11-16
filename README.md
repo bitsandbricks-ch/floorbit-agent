@@ -67,6 +67,12 @@ the agent sends it every half minute.
 [`grafana/floorbit-agent.json`](grafana/floorbit-agent.json) is a Grafana dashboard for these
 metrics (Dashboards > New > Import), with one row per agent (`instance`).
 
+## Several agents, shared IPs
+
+Agents can share virtual IPs with VRRP, so the event network keeps reaching one when another goes
+down: keepalived in the image (`compose.vrrp.yml`), on the machine, or kube-vip/MetalLB on k3s.
+See [docs/vrrp.md](docs/vrrp.md).
+
 ## Security
 
 [docs/threat-model.md](docs/threat-model.md) says what the agent protects, from whom, and how;

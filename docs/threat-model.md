@@ -63,7 +63,12 @@ UDP and sends them on, the flows only as a summary.
   the port is reachable from the LAN, set `FLOORBIT_AGENT_METRICS_TOKEN`. `/healthz` stays open on
   purpose: it says only up or down, the link and how long ago.
 - **Take over the agent's address:** a captive portal or VRRP address taken by an attendee is a
-  layer-2 problem. Keep the agents and their virtual IPs on a management VLAN.
+  layer-2 problem. VRRP has no real authentication: anyone on the VLAN can claim a VIP with a
+  higher priority. Keep the agents and their virtual IPs on a management VLAN.
+- **VRRP mode's rights:** the container gets `NET_ADMIN` and the host network. The agent still runs
+  as user 10001; only the keepalived program carries the network capabilities, and it runs no
+  scripts. Its config is written by the agent from validated settings (addresses parsed, the
+  interface name checked), so a setting can't add config of its own.
 
 ### Someone with the agent key
 
