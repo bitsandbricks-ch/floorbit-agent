@@ -45,7 +45,7 @@ REPORT_EVERY = 30         # seconds between reports to the hosted side (its Loca
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
-           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours')
+           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe')
 
 
 def _within(seconds, open_it, late=None):
@@ -126,6 +126,50 @@ def game_call(method, args, env=None):
         raise PluginError(str(exc)) from None
 
 
+def probe_target(host, env=None):
+    """The address to probe, if it may be probed. Unlike game servers, internet lines and resolvers
+    are often public, so any address goes except this machine's own and link-local ones (or only
+    FLOORBIT_AGENT_PROBE_NETS when set). A probe only connects to 53, 80, 443 or 853 and sends
+    nothing, or sends one DNS query, so it can't be used to talk to a service."""
+    import ipaddress
+    import socket
+
+    from floorbit.plugins.base import PluginError
+    env = os.environ if env is None else env
+    nets = [ipaddress.ip_network(n.strip(), strict=False)
+            for n in (env.get('FLOORBIT_AGENT_PROBE_NETS') or '').split(',') if n.strip()]
+    try:
+        addrs = {info[4][0] for info in socket.getaddrinfo(str(host), None, proto=socket.IPPROTO_TCP)}
+    except (OSError, UnicodeError):
+        raise PluginError(f'The agent cannot resolve {host}.') from None
+    for addr in sorted(addrs):
+        ip = ipaddress.ip_address(addr.split('%')[0])
+        if nets:
+            if any(ip in net for net in nets):
+                return str(ip)
+        elif not (ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast):
+            return str(ip)
+    raise PluginError(f'{host} is not an address the agent may probe.')
+
+
+def probe_call(method, args, env=None):
+    """A DNS or TCP probe for the services view (floorbit/probes.py), from the event network."""
+    from floorbit import probes
+    from floorbit.plugins.base import PluginError
+    try:
+        if method == 'dns_probe':
+            server, name = args
+            return probes.dns(probe_target(server, env), str(name))
+        host, port, count = args
+        if int(port) not in probes.PROBE_PORTS:
+            raise PluginError(f'The agent only probes ports {", ".join(map(str, probes.PROBE_PORTS))}.')
+        return probes.tcp(probe_target(host, env), int(port), min(int(count), probes.MAX_COUNT))
+    except probes.ProbeError as exc:
+        raise PluginError(str(exc)) from None
+    except (TypeError, ValueError):
+        raise PluginError('The probe was asked for wrongly.') from None
+
+
 def local_executor(app):
     """Run a call against this machine's monitoring plugin, as the hosted Floorbit would locally."""
     def execute(method, args):
@@ -135,6 +179,8 @@ def local_executor(app):
             raise PluginError(f'{method} is not something the agent answers')
         if method in ('game_query', 'game_rcon'):
             return game_call(method, args)
+        if method in ('dns_probe', 'tcp_probe'):
+            return probe_call(method, args)
         with app.app_context():
             registry = sources.registry
             if method == 'inventory_feeds':
