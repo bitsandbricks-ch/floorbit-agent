@@ -607,12 +607,39 @@ def start_syslog(agent, port, out=print):
     if not port:
         return None
     try:
-        relay = Relay(agent.send_syslog, int(port), os.environ.get('FLOORBIT_AGENT_SYSLOG_BIND') or '0.0.0.0', log=out)
+        relay = Relay(agent.send_syslog, int(port), os.environ.get('FLOORBIT_AGENT_SYSLOG_BIND') or '0.0.0.0', log=out,
+                      spool=open_buffer('syslog', os.environ, out))
         relay.start()
     except (ValueError, OSError, OverflowError) as exc:
         out(f'[agent] cannot listen for syslog on "{port}": {exc}')
         return False
     return relay
+
+
+def open_buffer(kind, env, out=print):
+    """The disk buffer for one kind of data (spool.py), in the state volume next to the agent's
+    settings: FLOORBIT_AGENT_BUFFER_DIR, _MAX_MB (2048) and _MAX_HOURS (24); _MAX_MB=0 turns it
+    off. None when it is off or its folder can't be made (the relay then keeps lines in memory)."""
+    from .spool import Spool
+    try:
+        max_mb = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_MB') or 2048)
+        max_hours = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_HOURS') or 24)
+    except ValueError:
+        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers; no disk buffer')
+        return None
+    if max_mb <= 0:
+        return None
+    base = env.get('FLOORBIT_AGENT_BUFFER_DIR') or os.path.join(
+        os.path.dirname(os.path.abspath(env.get('FLOORBIT_DATA_FILE') or 'agent-data.json')), 'buffer')
+    try:
+        spool = Spool(os.path.join(base, kind), max_bytes=int(max_mb * 1024 ** 2), max_age=max_hours * 3600, log=out)
+    except OSError as exc:
+        out(f'[agent] no disk buffer for {kind} in {base}: {exc}')
+        return None
+    if len(spool):
+        out(f'[agent] {len(spool)} {kind} records in the disk buffer from before: sending them once the '
+            'hosted Floorbit takes them')
+    return spool
 
 
 def start_flows(agent, port, out=print):

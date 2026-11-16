@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- A disk buffer for syslog: lines the hosted Floorbit can't take go to the state volume instead of being dropped, survive a restart, and are sent oldest first behind the live lines once it is back (at most 2 GB and 24 hours). Every line carries a stable ID so copies can be dropped.
 - VRRP mode: agents share virtual IPs through keepalived in the image (`compose.vrrp.yml`, `docs/vrrp.md`), each holding its preferred VIP while it is up and the others taking over in seconds. State in `/metrics` and the log. `scripts/vrrp_check.py` checks failover with the real keepalived in two network namespaces, also in CI.
 - Every half minute the agent sends the hosted Floorbit a short report about itself (up time, link drops, syslog and NetFlow counts, busy calls), shown on its Local agents page. Over the link, or a POST on the long poll; an older Floorbit that has no place for it is asked once.
 - Each kind of call runs in its own small pool, so a hung LibreNMS lookup holds up only more of the same kind. When more than 200 calls of one kind wait, the rest get a "busy" answer at once instead of piling up.

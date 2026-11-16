@@ -18,7 +18,7 @@ UDP and sends them on, the flows only as a summary.
 | The agent key (`fba_<id>_<secret>`) | `agent.env` on the agent machine; only its SHA-256 on the hosted side |
 | LibreNMS and NetBox tokens | `agent.env`; they never leave the agent machine |
 | The event network's layout: switches, ports, ARP (IP ↔ MAC) | LibreNMS/NetBox; passes through the agent as answers |
-| Syslog lines | from the switches, through the agent, to the hosted Logs page |
+| Syslog lines | from the switches, through the agent, to the hosted Logs page; while the uplink is down, in the agent's disk buffer (`/app/state/buffer`, readable by the agent's user only, at most 24 h) |
 | Traffic data | NetFlow stays on the agent; only aggregates leave it (seat totals, protocol mix, 5+ seats rule) |
 | The agent machine itself | the event network |
 

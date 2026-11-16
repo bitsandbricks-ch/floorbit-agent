@@ -6,9 +6,15 @@ to cross the internet, unencrypted and unauthenticated. So the agent listens ins
 in batches, with the address each came from and when it arrived. The hosted side checks those
 senders against its allow-list as if they had sent there (floorbit/syslog.py, ``relay``).
 
-While the hosted Floorbit can't be reached, lines wait in memory, up to ``BACKLOG``; past that the
-newest are dropped and counted, so a flood can't eat the machine's memory.
+Lines wait in memory for the next send, up to ``BACKLOG``; past that the newest are dropped and
+counted, so a flood can't eat the machine's memory. While the hosted Floorbit can't be reached,
+they go to the disk buffer (spool.py) instead, which survives a restart and is sent oldest first
+once the hosted side is back, behind the live lines (floorbit#465).
+
+Each line carries an ID made of where it came from and what it says, the same on every agent that
+heard it, so the hosted side can keep one copy when two agents, or a replay, send it twice.
 """
+import hashlib
 import socketserver
 import threading
 import time
@@ -18,6 +24,8 @@ MAX_LINE = 2048          # as floorbit/syslog.py
 BACKLOG = 20_000
 BATCH = 2000             # the hosted side takes at most this many per post
 EVERY = 2.0              # seconds between sends while lines come in
+REPLAY = 5               # buffered batches per round once the hosted side is back: the backlog
+                         # catches up at 5,000 lines a second without crowding out live lines
 
 
 class TurnedOff(RuntimeError):
@@ -25,9 +33,12 @@ class TurnedOff(RuntimeError):
 
 
 class Relay:
-    def __init__(self, send, port, bind='0.0.0.0', backlog=BACKLOG, log=print):
-        """``send(lines, dropped)`` posts one batch; it raises on failure."""
+    def __init__(self, send, port, bind='0.0.0.0', backlog=BACKLOG, log=print, spool=None):
+        """``send(lines, dropped)`` posts one batch; it raises on failure. ``spool``: a
+        spool.Spool for the lines that can't be sent now; without it they wait in memory."""
         self.send = send
+        self.spool = spool
+        self.replayed = 0
         self.port = port
         self.bind = bind
         self.backlog = backlog
@@ -53,16 +64,64 @@ class Relay:
             if len(self.lines) >= self.backlog:
                 self.dropped += 1
                 return
-            self.lines.append({'raw': raw, 'from': sender, 'at': time.time() if now is None else now})
+            self.lines.append({'raw': raw, 'from': sender, 'at': time.time() if now is None else now,
+                               'id': line_id(sender, raw)})
+
+    @property
+    def all_dropped(self):
+        return self.dropped + (self.spool.dropped if self.spool is not None else 0)
+
+    @property
+    def buffered(self):
+        return len(self.spool) if self.spool is not None else 0
+
+    def spill(self):
+        """Move what waits in memory to the disk buffer, oldest first, a batch per file."""
+        if self.spool is None:
+            return
+        while True:
+            with self._lock:
+                batch = [self.lines.popleft() for _ in range(min(BATCH, len(self.lines)))]
+            if not batch:
+                return
+            self.spool.put(batch)
 
     def flush_once(self):
-        """Send what waits, a batch at a time. Returns how many went; raises when a send fails
-        (the lines stay for the next try)."""
+        """Send what waits: the live lines first, then up to REPLAY batches from the disk buffer.
+        Returns how many went; raises when a send fails (live lines then go to the disk buffer)."""
+        try:
+            total = self._send_live()
+        except TurnedOff:
+            raise
+        except Exception:
+            self.spill()
+            raise
+        return total + self._replay()
+
+    def _replay(self):
+        total = 0
+        for _ in range(REPLAY if self.spool is not None else 0):
+            found = self.spool.oldest()
+            if found is None:
+                break
+            name, batch = found
+            try:
+                self.send(batch, self.all_dropped)
+            except TurnedOff:
+                self.spool.done(name, dropped=True)
+                raise
+            self.spool.done(name)
+            self.replayed += len(batch)
+            self.sent += len(batch)
+            total += len(batch)
+        return total
+
+    def _send_live(self):
         total = 0
         while True:
             with self._lock:
                 batch = [self.lines[i] for i in range(min(BATCH, len(self.lines)))]
-                dropped = self.dropped
+                dropped = self.all_dropped
             if not batch:
                 return total
             try:
@@ -85,11 +144,14 @@ class Relay:
             try:
                 self.flush_once()
                 if self._failing:
-                    self.log(f'[agent] syslog is getting through again ({len(self.lines)} lines waiting)')
+                    self.log(f'[agent] syslog is getting through again ({len(self.lines) + self.buffered} '
+                             'lines waiting)')
                 self._failing = False
             except Exception as exc:  # noqa: BLE001  # keep the lines, try again next round
                 if not self._failing:
-                    self.log(f'[agent] could not send syslog: {exc}; keeping up to {self.backlog} lines')
+                    keeping = (f'keeping them on disk in {self.spool.folder}' if self.spool is not None
+                               else f'keeping up to {self.backlog} lines')
+                    self.log(f'[agent] could not send syslog: {exc}; {keeping}')
                 self._failing = True
 
     def start(self):
@@ -114,6 +176,17 @@ class Relay:
         if flush and self.lines:
             # On the way out (docker stop): one last try, so a restart doesn't lose the backlog.
             try:
-                self.flush_once()
+                self._send_live()
             except Exception as exc:  # noqa: BLE001
-                self.log(f'[agent] {len(self.lines)} syslog lines could not be sent before stopping: {exc}')
+                if self.spool is not None:
+                    self.spill()
+                    self.log(f'[agent] syslog lines kept on disk for the next start ({exc})')
+                else:
+                    self.log(f'[agent] {len(self.lines)} syslog lines could not be sent before stopping: {exc}')
+
+
+def line_id(sender, raw):
+    """The same for the same line from the same switch, whichever agent heard it. The hosted side
+    keeps one copy of an ID within a few minutes of its time (a switch's lines carry their own
+    timestamp, so a real repeat differs)."""
+    return hashlib.sha256(f'{sender}\n{raw}'.encode()).hexdigest()[:24]

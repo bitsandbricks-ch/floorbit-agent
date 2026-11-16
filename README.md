@@ -46,6 +46,16 @@ python -m floorbit_agent health    # 0 when the hosted Floorbit answered in the 
 Every setting, what works through the agent and the protocol are in Floorbit's
 [docs/agent.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md).
 
+## When the uplink is down
+
+Syslog the agent can't send goes to a disk buffer in its state volume (`/app/state/buffer`), so
+nothing is lost while the hosted Floorbit is away or the agent restarts. Once it is back, the agent
+sends the newest lines first and catches up on the buffer behind them, oldest first, at up to
+5,000 lines a second. The buffer keeps at most 2 GB and 24 hours (`FLOORBIT_AGENT_BUFFER_MAX_MB`,
+`FLOORBIT_AGENT_BUFFER_MAX_HOURS`; `0` MB turns it off); past that the oldest lines go first, counted
+in `floorbit_agent_syslog_dropped_total`. Every line carries an ID made of its sender and text, the
+same on every agent, so the hosted side can drop copies.
+
 ## Monitor it
 
 The agent answers on port 9520 (`FLOORBIT_AGENT_METRICS`; `compose.yml` publishes it on the
