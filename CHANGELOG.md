@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- The agent answers `firewall_feeds`: a hosted Floorbit's **Import from NetBox** on Firewalls reads the seat ranges from the event's NetBox through it.
 - The agent answers `dns_probe` and `tcp_probe`, so a hosted Floorbit's services view measures the event's internet lines and resolvers from the event network (bitsandbricks-ch/floorbit#471). Never towards the agent machine or link-local addresses (or only `FLOORBIT_AGENT_PROBE_NETS`); TCP probes only to ports 53, 80, 443 and 853, sending nothing.
 - The agent answers `neighbours`, what each switch sees by LLDP or CDP, for the hosted topology page (bitsandbricks-ch/floorbit#468).
 - The agent answers `game_query` and `game_rcon`, so a hosted Floorbit can watch the hall's game servers and send RCON commands from the event network (bitsandbricks-ch/floorbit#472). Only private addresses are asked, or the networks in `FLOORBIT_AGENT_GAME_NETS`; the RCON password comes with each call and is never kept or logged.

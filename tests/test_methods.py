@@ -38,3 +38,23 @@ def test_lldp_neighbours_go_to_the_plugin(monkeypatch):
     monkeypatch.setattr(sources, 'registry', registry)
     floorbit_agent.local_executor(flask.Flask('test'))('neighbours', ['sw-a-01'])
     assert registry.calls == [('librenms', 'neighbours', ('sw-a-01',))]
+
+
+def test_firewall_ranges_come_from_the_agents_netbox(monkeypatch):
+    from floorbit import firewalls
+
+    class Feeding(Registry):
+        def call(self, spec, method, *args):
+            self.calls.append((spec.name, method, args))
+            return [{'cidr': '192.0.2.0/27', 'name': 'Block A', 'firewalls': ['fw-01', 'fw-02']}]
+
+    class Spec:
+        id, name = 'netbox', 'NetBox'
+
+    registry = Feeding()
+    monkeypatch.setattr(sources, 'registry', registry)
+    monkeypatch.setattr(firewalls, 'import_sources', lambda reg: [Spec()])
+    feeds = floorbit_agent.local_executor(flask.Flask('test'))('firewall_feeds', [])
+    assert feeds == [{'plugin': 'netbox', 'name': 'NetBox',
+                      'items': [{'cidr': '192.0.2.0/27', 'name': 'Block A', 'firewalls': ['fw-01', 'fw-02']}]}]
+    assert registry.calls == [('NetBox', 'firewall_ranges', ())]
