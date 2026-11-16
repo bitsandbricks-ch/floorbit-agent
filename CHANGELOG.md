@@ -27,3 +27,7 @@ All notable changes to this project are listed here. The format follows
 - A burst of syslog no longer loses most of its lines: one thread reads the port instead of a thread per datagram, which kept only about a fifth of a 25,000-line-a-second burst. Syslog and NetFlow ask for an 8 MB receive buffer.
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
 - `/healthz` no longer reads as unhealthy when the clock steps back.
+
+### Security
+
+- Game server queries and service probes check an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it reaches: on Python 3.11 it got past the loopback and link-local checks. Game queries also skip link-local addresses, which Python counts as private.

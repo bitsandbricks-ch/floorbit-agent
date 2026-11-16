@@ -84,6 +84,12 @@ class Refused(RuntimeError):
     """The hosted Floorbit refused the key: retrying won't help."""
 
 
+def _unmapped(ip):
+    """::ffff:127.0.0.1 reaches 127.0.0.1, but Python before 3.13 calls it neither loopback nor
+    link-local: check the IPv4 address it stands for."""
+    return getattr(ip, 'ipv4_mapped', None) or ip
+
+
 def game_target(host, env=None):
     """The address to ask a game server at, if it may be asked. The hosted side names the host, so
     the agent only reaches private addresses (or FLOORBIT_AGENT_GAME_NETS): a hosted Floorbit that
@@ -100,8 +106,8 @@ def game_target(host, env=None):
     except (OSError, UnicodeError):
         raise PluginError(f'The agent cannot resolve {host}.') from None
     for addr in sorted(addrs):
-        ip = ipaddress.ip_address(addr.split('%')[0])
-        if any(ip in net for net in nets) if nets else (ip.is_private and not ip.is_loopback):
+        ip = _unmapped(ipaddress.ip_address(addr.split('%')[0]))
+        if any(ip in net for net in nets) if nets else (ip.is_private and not (ip.is_loopback or ip.is_link_local)):
             return str(ip)
     raise PluginError(f'{host} is not on a network the agent may ask game servers on '
                       '(private addresses, or FLOORBIT_AGENT_GAME_NETS).')
@@ -143,7 +149,7 @@ def probe_target(host, env=None):
     except (OSError, UnicodeError):
         raise PluginError(f'The agent cannot resolve {host}.') from None
     for addr in sorted(addrs):
-        ip = ipaddress.ip_address(addr.split('%')[0])
+        ip = _unmapped(ipaddress.ip_address(addr.split('%')[0]))
         if nets:
             if any(ip in net for net in nets):
                 return str(ip)
