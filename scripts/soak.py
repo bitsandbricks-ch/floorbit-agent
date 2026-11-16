@@ -10,6 +10,7 @@ Nothing here talks to a real Floorbit, LibreNMS or NetBox.
 import argparse
 import contextlib
 import json
+import logging
 import os
 import pathlib
 import random
@@ -115,6 +116,7 @@ def main():
     p.add_argument('--max-growth-mb', type=float, default=30)
     args = p.parse_args()
 
+    logging.getLogger('werkzeug').setLevel(logging.ERROR)   # one line per request is noise here
     agent_mod.LINK_STEADY = 0          # a planned drop is not a broken proxy: reconnect straight away
     host = Host(args.calls_per_second, args.drop_link_every)
     http = requests.Session()
