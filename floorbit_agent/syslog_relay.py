@@ -14,14 +14,16 @@ once the hosted side is back, behind the live lines (floorbit#465).
 Each line carries an ID made of where it came from and what it says, the same on every agent that
 heard it, so the hosted side can keep one copy when two agents, or a replay, send it twice.
 """
+import contextlib
 import hashlib
-import socketserver
+import socket
 import threading
 import time
 from collections import deque
 
 MAX_LINE = 2048          # as floorbit/syslog.py
 BACKLOG = 20_000
+RECEIVE_BUFFER = 8 * 1024 ** 2   # bytes asked of the kernel (capped at net.core.rmem_max)
 BATCH = 2000             # the hosted side takes at most this many per post
 EVERY = 2.0              # seconds between sends while lines come in
 REPLAY = 5               # buffered batches per round once the hosted side is back: the backlog
@@ -155,23 +157,38 @@ class Relay:
                 self._failing = True
 
     def start(self):
-        relay = self
-
-        class Udp(socketserver.BaseRequestHandler):
-            def handle(self):
-                relay.receive(self.request[0], self.client_address[0])
-
-        self._server = socketserver.ThreadingUDPServer((self.bind, self.port), Udp)
-        threading.Thread(target=self._server.serve_forever, name='agent-syslog', daemon=True).start()
+        # One thread reading one socket with a big receive buffer: a thread per datagram (what
+        # socketserver does) can't keep up with a burst, and the kernel drops what doesn't fit.
+        family = socket.AF_INET6 if ':' in self.bind else socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_DGRAM)
+        with contextlib.suppress(OSError):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECEIVE_BUFFER)
+        try:
+            sock.bind((self.bind, self.port))
+        except OSError:
+            sock.close()
+            raise
+        sock.settimeout(0.5)          # so stop() is noticed
+        self._server = sock
+        threading.Thread(target=self._receiving, args=(sock,), name='agent-syslog', daemon=True).start()
         threading.Thread(target=self._flushing, name='agent-syslog-send', daemon=True).start()
-        self.log(f'[agent] listening for syslog on UDP {self._server.server_address[1]}')
-        return self._server.server_address[1]
+        self.log(f'[agent] listening for syslog on UDP {sock.getsockname()[1]}')
+        return sock.getsockname()[1]
+
+    def _receiving(self, sock):
+        while not self._stop.is_set():
+            try:
+                data, sender = sock.recvfrom(65535)
+            except TimeoutError:
+                continue
+            except OSError:
+                return                # closed by stop()
+            self.receive(data, sender[0])
 
     def stop(self, flush=True):
         self._stop.set()
         if self._server is not None:
-            self._server.shutdown()
-            self._server.server_close()
+            self._server.close()
             self._server = None
         if flush and self.lines:
             # On the way out (docker stop): one last try, so a restart doesn't lose the backlog.

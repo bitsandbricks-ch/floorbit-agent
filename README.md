@@ -56,6 +56,10 @@ sends the newest lines first and catches up on the buffer behind them, oldest fi
 in `floorbit_agent_syslog_dropped_total`. Every line carries an ID made of its sender and text, the
 same on every agent, so the hosted side can drop copies.
 
+A busy event's switches send syslog and NetFlow in bursts. The agent asks the kernel for an 8 MB
+receive buffer on each port, but Linux caps it at `net.core.rmem_max` (often 208 KB): on the agent
+machine, `sysctl -w net.core.rmem_max=8388608` (and in `/etc/sysctl.d/` to keep it) gives it the room.
+
 ## Monitor it
 
 The agent answers on port 9520 (`FLOORBIT_AGENT_METRICS`; `compose.yml` publishes it on the
