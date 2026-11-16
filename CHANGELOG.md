@@ -17,6 +17,10 @@ All notable changes to this project are listed here. The format follows
 - The WebSocket link (agent protocol 2): calls arrive over one open `wss://` connection the moment they are made. The agent falls back to the HTTPS long poll when the hosted Floorbit doesn't offer the link or it can't be opened, and stays on protocol 1 with an older Floorbit.
 - The local agent, moved here from Floorbit (`floorbit/agent/`): call loop, `check` and `health`, syslog and NetFlow relays, gzip, protocol 1. Its own image, `ghcr.io/bitsandbricks-ch/floorbit-agent`, with the Python parts of Floorbit at `FLOORBIT_REF` (no web pages, no React app).
 
+### Changed
+
+- Built and tested on Floorbit at its current master (`FLOORBIT_REF`), with the agent's own changes merged there.
+
 ### Fixed
 
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
