@@ -85,8 +85,8 @@ class Refused(RuntimeError):
 
 
 def _unmapped(ip):
-    """::ffff:127.0.0.1 reaches 127.0.0.1, but Python before 3.13 calls it neither loopback nor
-    link-local: check the IPv4 address it stands for."""
+    """::ffff:127.0.0.1 reaches 127.0.0.1, but not every Python release calls it loopback (or
+    ::ffff:169.254.0.1 link-local): check the IPv4 address it stands for."""
     return getattr(ip, 'ipv4_mapped', None) or ip
 
 

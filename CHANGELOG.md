@@ -30,4 +30,5 @@ All notable changes to this project are listed here. The format follows
 
 ### Security
 
-- Game server queries and service probes check an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it reaches: on Python 3.11 it got past the loopback and link-local checks. Game queries also skip link-local addresses, which Python counts as private.
+- Game server queries no longer go to link-local addresses (`169.254.169.254`, where clouds keep their metadata service): Python counts them as private, so they passed the private-only check.
+- Game queries and service probes check an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it reaches, also on Python releases that don't do so themselves.
