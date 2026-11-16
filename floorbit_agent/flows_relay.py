@@ -7,11 +7,13 @@ with addresses and ports, stay on the agent (``FLOWS_DIR``, for ``FLOWS_RETENTIO
 
 To count per seat it needs the seats' addresses: it asks the hosted Floorbit for them every minute.
 """
+import contextlib
 import socket
 import threading
 
 from floorbit.flows.collector import Collector
 
+RECEIVE_BUFFER = 8 * 1024 ** 2
 READ_TIMEOUT = 1.0
 
 
@@ -68,6 +70,10 @@ class FlowsRelay:
 
     def start(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Exporters send in bursts: room in the kernel so they wait for the read instead of being
+        # dropped (capped at net.core.rmem_max).
+        with contextlib.suppress(OSError):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RECEIVE_BUFFER)
         try:
             sock.bind((self.bind, self.port))
         except OSError:
