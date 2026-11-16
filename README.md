@@ -87,6 +87,15 @@ Agents can share virtual IPs with VRRP, so the event network keeps reaching one 
 down: keepalived in the image (`compose.vrrp.yml`), on the machine, or kube-vip/MetalLB on k3s.
 See [docs/vrrp.md](docs/vrrp.md).
 
+## The check-in note (Captive Portal API)
+
+With `FLOORBIT_AGENT_CAPTIVE=0.0.0.0:8908`, the agent answers `/.well-known/captive-portal`
+(RFC 8908). Point DHCP option 114 at it, through the event's HTTPS reverse proxy, and phones and
+laptops show a quiet "sign in to network" note until their seat has checked in. Nothing is ever
+blocked. See Floorbit's
+[docs/integrations.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/integrations.md#the-sign-in-to-network-note-captive-portal-api).
+With VRRP, point option 114 at a virtual IP, so the note keeps working when one agent is down.
+
 ## Security
 
 [docs/threat-model.md](docs/threat-model.md) says what the agent protects, from whom, and how;

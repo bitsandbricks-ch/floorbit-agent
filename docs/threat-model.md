@@ -63,6 +63,11 @@ UDP and sends them on, the flows only as a summary.
   Fake syslog lines are dropped by the hosted side's allow-list (`SYSLOG_ALLOW`, the switches'
   management addresses). Fake flows can skew traffic statistics but carry nothing back. Put the
   ports on the management network or limit them with a firewall rule.
+- **Ask the Captive Portal API** (only with `FLOORBIT_AGENT_CAPTIVE`): it has to be reachable by
+  attendees, by design. A client learns only whether its own IP counts as checked in, and the URL of
+  the check-in page. The list of checked-in IPs never leaves the agent. `X-Forwarded-For` is
+  believed only from the addresses in `FLOORBIT_AGENT_CAPTIVE_PROXIES`, so a client can't ask about
+  another IP. A wrong answer can only show or hide the note: nothing is blocked either way.
 - **Flood the UDP ports:** the syslog backlog has a fixed size, the newest lines are dropped and
   counted (`floorbit_agent_syslog_dropped_total`), and memory stays bounded.
 - **Read the report:** the half-minute report to the hosted Floorbit carries the same kind of counts
