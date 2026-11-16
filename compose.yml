@@ -19,7 +19,9 @@ services:
       FLOORBIT_DATA_FILE: /app/state/agent-data.json
     volumes:
       - agent_state:/app/state
-    # ports:
+    ports:
+      # /metrics and /healthz for Prometheus, on this machine only (README.md, "Monitor it").
+      - "127.0.0.1:9520:9520"
     #   - "514:5514/udp"
     #   - "2055:2055/udp"
     # A refused key (revoked or wrong) stops the agent with exit code 1: don't restart it into

@@ -30,13 +30,21 @@ RUN rm /app/requirements.txt
 COPY floorbit_agent/ /app/floorbit_agent/
 COPY VERSION /app/floorbit_agent/VERSION
 
+# keepalived for the optional VRRP mode (vrrp.py). The file capabilities let it set the virtual IPs
+# while the agent runs as a normal user; the kernel only allows them when the container was given
+# NET_ADMIN (compose.vrrp.yml), so without VRRP mode they grant nothing.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends keepalived libcap2-bin \
+    && setcap cap_net_admin,cap_net_raw+ep /usr/sbin/keepalived \
+    && apt-get purge -y libcap2-bin && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --system --uid 10001 --create-home --home-dir /home/floorbit --shell /usr/sbin/nologin floorbit \
     && mkdir -p /app/state && chown floorbit:floorbit /app/state
 VOLUME /app/state
 USER floorbit
 ENV FLOORBIT_DATA_FILE=/app/state/agent-data.json PYTHONUNBUFFERED=1
 # The agent serves no pages: nothing to expose but the optional syslog and flow ports.
-EXPOSE 5514/udp 2055/udp
+EXPOSE 5514/udp 2055/udp 9520/tcp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=2 \
     CMD ["python", "-m", "floorbit_agent", "health"]
 CMD ["python", "-m", "floorbit_agent"]

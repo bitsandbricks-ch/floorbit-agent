@@ -24,6 +24,7 @@ class FlowsRelay:
         self.collector = collector or Collector(log=log)
         self.collector.publish = self._publish
         self.sent = 0
+        self.packets = 0
         self._failing = False
         self._stop = threading.Event()
         self._sock = None
@@ -54,6 +55,7 @@ class FlowsRelay:
         while not self._stop.is_set():
             try:
                 data, (addr, _port) = self._sock.recvfrom(65535)
+                self.packets += 1
                 if self.collector.enabled():
                     self.collector.receive(data, addr)
             except TimeoutError:
