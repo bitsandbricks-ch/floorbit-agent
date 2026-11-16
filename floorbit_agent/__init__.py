@@ -45,7 +45,7 @@ REPORT_EVERY = 30         # seconds between reports to the hosted side (its Loca
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
-           'wifi_feeds')
+           'wifi_feeds', 'game_query', 'game_rcon')
 
 
 def _within(seconds, open_it, late=None):
@@ -84,6 +84,48 @@ class Refused(RuntimeError):
     """The hosted Floorbit refused the key: retrying won't help."""
 
 
+def game_target(host, env=None):
+    """The address to ask a game server at, if it may be asked. The hosted side names the host, so
+    the agent only reaches private addresses (or FLOORBIT_AGENT_GAME_NETS): a hosted Floorbit that
+    was taken over can't use the agent to reach the internet or this machine's own ports."""
+    import ipaddress
+    import socket
+
+    from floorbit.plugins.base import PluginError
+    env = os.environ if env is None else env
+    nets = [ipaddress.ip_network(n.strip(), strict=False)
+            for n in (env.get('FLOORBIT_AGENT_GAME_NETS') or '').split(',') if n.strip()]
+    try:
+        addrs = {info[4][0] for info in socket.getaddrinfo(str(host), None, proto=socket.IPPROTO_TCP)}
+    except (OSError, UnicodeError):
+        raise PluginError(f'The agent cannot resolve {host}.') from None
+    for addr in sorted(addrs):
+        ip = ipaddress.ip_address(addr.split('%')[0])
+        if any(ip in net for net in nets) if nets else (ip.is_private and not ip.is_loopback):
+            return str(ip)
+    raise PluginError(f'{host} is not on a network the agent may ask game servers on '
+                      '(private addresses, or FLOORBIT_AGENT_GAME_NETS).')
+
+
+def game_call(method, args, env=None):
+    """A game server query or RCON command (floorbit/game_query.py), from the event network."""
+    from floorbit import game_query
+    from floorbit.plugins.base import PluginError
+    if method == 'game_query':
+        protocol, host, port = args
+        target = game_target(host, env)
+        try:
+            return game_query.query(protocol, target, int(port))
+        except game_query.QueryError as exc:
+            raise PluginError(str(exc)) from None
+    host, port, password, command = args
+    target = game_target(host, env)
+    try:
+        return game_query.rcon(target, int(port), password, command)
+    except game_query.QueryError as exc:
+        raise PluginError(str(exc)) from None
+
+
 def local_executor(app):
     """Run a call against this machine's monitoring plugin, as the hosted Floorbit would locally."""
     def execute(method, args):
@@ -91,6 +133,8 @@ def local_executor(app):
         from floorbit.plugins.base import PluginError
         if method not in METHODS:
             raise PluginError(f'{method} is not something the agent answers')
+        if method in ('game_query', 'game_rcon'):
+            return game_call(method, args)
         with app.app_context():
             registry = sources.registry
             if method == 'inventory_feeds':

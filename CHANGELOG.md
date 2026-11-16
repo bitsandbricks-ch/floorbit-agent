@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- The agent answers `game_query` and `game_rcon`, so a hosted Floorbit can watch the hall's game servers and send RCON commands from the event network (bitsandbricks-ch/floorbit#472). Only private addresses are asked, or the networks in `FLOORBIT_AGENT_GAME_NETS`; the RCON password comes with each call and is never kept or logged.
 - The agent answers `port_clients`, a switch's MAC table by port, so a hosted Floorbit can list the machines on seat ports that its patch plan doesn't explain (bitsandbricks-ch/floorbit#473).
 - A disk buffer for syslog: lines the hosted Floorbit can't take go to the state volume instead of being dropped, survive a restart, and are sent oldest first behind the live lines once it is back (at most 2 GB and 24 hours). Every line carries a stable ID so copies can be dropped.
 - VRRP mode: agents share virtual IPs through keepalived in the image (`compose.vrrp.yml`, `docs/vrrp.md`), each holding its preferred VIP while it is up and the others taking over in seconds. State in `/metrics` and the log. `scripts/vrrp_check.py` checks failover with the real keepalived in two network namespaces, also in CI.
