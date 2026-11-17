@@ -43,7 +43,9 @@ class AgentContext:
         self.id = plugin_id
         self.config = config
         self.settings = dict(config.get('settings') or {})
-        self.spec_block = {'sends': config.get('sends') or {}}
+        self.spec_block = {'sends': config.get('sends') or {}, 'fetches': config.get('fetches') or []}
+        self._latest = {}          # kind -> the newest record of a ``latest`` kind, not yet sent
+        self._latest_lock = threading.Lock()
         self.stopping = threading.Event()
         self.health_ = Health()
         self.tls = False
@@ -97,6 +99,13 @@ class AgentContext:
         record = {'kind': kind, 'payload': payload, 'at': time.time()}
         if len(json.dumps(record, default=str)) > SEND_MAX_BYTES:
             raise PluginError(f'{kind} is larger than {SEND_MAX_BYTES // 1024 ** 2} MB')
+        if (self.spec_block['sends'].get(kind) or {}).get('latest'):
+            # Only the newest counts (a summary): one waits in memory, replacing the one before.
+            self.spool()
+            with self._latest_lock:
+                self._latest[kind] = record
+            self._wake.set()
+            return
         if not self.spool().put([json.loads(json.dumps(record, default=str))]):
             self.counter('dropped')
         self._wake.set()
@@ -126,6 +135,15 @@ class AgentContext:
 
     def _send_batch(self):
         sent = 0
+        for kind, record in list(self._latest.items()):
+            status = self.host.post(self.id, kind, record['payload'])
+            if status is None:
+                return None
+            with self._latest_lock:
+                if self._latest.get(kind) is record:     # a newer one may have come meanwhile
+                    del self._latest[kind]
+            self._count_answer(record, status)
+            sent += 1
         while sent < BATCH and not self.stopping.is_set():
             got = self._spool.oldest()
             if got is None:
@@ -135,17 +153,28 @@ class AgentContext:
                 status = self.host.post(self.id, record['kind'], record['payload'])
                 if status is None:
                     return None
-                if status >= 400:          # refused (off, bad payload): sending again won't help
-                    self.counter('rejected')
-                    self.error(f'the hosted Floorbit refused {record["kind"]} (HTTP {status})')
-                else:
-                    self.counter('sent')
+                self._count_answer(record, status)
             self._spool.done(name)
             sent += len(records)
         return sent
 
+    def _count_answer(self, record, status):
+        if status >= 400:          # refused (off, bad payload): sending again won't help
+            self.counter('rejected')
+            self.error(f'the hosted Floorbit refused {record["kind"]} (HTTP {status})')
+        else:
+            self.counter('sent')
+
+    def fetch(self, kind):
+        """What the hosted part's ``agent_get_<kind>`` answers (listed under agent.fetches).
+        PluginError when it isn't listed or the hosted side can't answer now."""
+        from floorbit.plugins.base import PluginError
+        if kind not in self.spec_block['fetches']:
+            raise PluginError(f'agent.fetches does not list {kind}')
+        return self.host.fetch(self.id, kind)
+
     def backlog(self):
-        return len(self._spool) if self._spool is not None else 0
+        return (len(self._spool) if self._spool is not None else 0) + len(self._latest)
 
     # threads and listeners --------------------------------------------------------------
     def thread(self, fn, name=None):
@@ -432,6 +461,21 @@ class PluginHost:
         if resp.status_code == 401 or resp.status_code >= 500:
             return None
         return resp.status_code
+
+    def fetch(self, pid, kind):
+        from floorbit.plugins.base import PluginError
+        try:
+            resp = self.agent.http.get(f'{self.agent.url}/api/agent/v1/plugins/{pid}/{kind}',
+                                       headers=self.agent._headers(), timeout=30)
+        except Exception as exc:
+            raise PluginError(f'cannot reach the hosted Floorbit: {exc}') from exc
+        if resp.status_code != 200:
+            try:
+                why = (resp.json() or {}).get('error')
+            except ValueError:
+                why = None
+            raise PluginError(why or f'the hosted Floorbit answered HTTP {resp.status_code}')
+        return (resp.json() or {}).get('data')
 
     # calls from the hosted side ---------------------------------------------------------------
     def call(self, args):

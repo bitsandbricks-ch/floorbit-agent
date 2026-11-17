@@ -42,8 +42,8 @@ services:
 
   # Device telemetry (Floorbit's docs/telemetry.md): turn on the Telemetry plugin in the hosted
   # Floorbit and add the devices under Settings > Telemetry. The agent writes Telegraf's config
-  # into its state volume and takes what Telegraf collects on port 8186; only per-port numbers
-  # go to the hosted Floorbit. Also set FLOORBIT_AGENT_PLUGINS=telemetry in agent.env.
+  # into its state volume and takes what Telegraf collects on port 8186; per-port numbers and
+  # which MAC and IP is on which port go to the hosted Floorbit.
   #   docker compose --profile telemetry up -d
   telegraf:
     image: telegraf:1.40.3
