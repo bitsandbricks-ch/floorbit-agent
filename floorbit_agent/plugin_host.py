@@ -86,7 +86,8 @@ class AgentContext:
             self.host.report_soon()
 
     def may_login(self, device, credential, rev=None):
-        return self.auth.may_login(device, credential, rev)
+        # A standby leaves logins to the primary: two agents never try the same one (lockouts).
+        return self.primary() and self.auth.may_login(device, credential, rev)
 
     def gauge(self, name, value):
         self.health_.gauge(name, value)
