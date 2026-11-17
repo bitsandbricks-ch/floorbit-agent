@@ -230,3 +230,23 @@ def test_listeners_stop_with_the_plugin(setup):
     host.stop()
     with pytest.raises(OSError):
         urllib.request.urlopen(req, timeout=2)
+
+
+def test_failed_logins_are_not_tried_again_until_cleared(setup, tmp_path):
+    host, _hosted, agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    assert ctx.may_login("sw-a-01", "ssh-ops", 3)
+    ctx.auth_failed("sw-a-01", "ssh-ops", 3, "Authentication failed")
+    ctx.auth_failed("sw-a-01", "ssh-ops", 3, "again")          # said once
+    assert not ctx.may_login("sw-a-01", "ssh-ops", 3)
+    assert ctx.may_login("sw-a-01", "ssh-ops", 4)               # the password was edited
+    assert ctx.may_login("sw-a-02", "ssh-ops", 3)
+    blocked = agent.report()["plugins"]["hallthing"]["auth_blocked"]
+    assert [(b["device"], b["credential"], b["rev"]) for b in blocked] == [("sw-a-01", "ssh-ops", "3")]
+    assert agent._report_at is None                              # reported at once
+    # Kept on disk: a restart doesn't try it either.
+    from floorbit.plugins.agent import AuthBlocks
+    assert not AuthBlocks(ctx.auth.path).may_login("sw-a-01", "ssh-ops", 3)
+    assert host.call(["hallthing", "unblock", "", {"device": "sw-a-01", "credential": "ssh-ops"}]) == {"cleared": 1}
+    assert ctx.may_login("sw-a-01", "ssh-ops", 3) and agent.report()["plugins"]["hallthing"]["auth_blocked"] == []
