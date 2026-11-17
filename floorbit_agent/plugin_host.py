@@ -37,7 +37,7 @@ class AgentContext:
     """What one plugin's agent part works with. Same shape as floorbit.plugins.agent.MemoryContext."""
 
     def __init__(self, host, plugin_id, config):
-        from floorbit.plugins.agent import Health
+        from floorbit.plugins.agent import AuthBlocks, Health
         self.host = host
         self.id = plugin_id
         self.config = config
@@ -49,6 +49,7 @@ class AgentContext:
         self._closers = []
         self.state_dir = os.path.join(host.state_root, 'plugins', plugin_id)
         os.makedirs(self.state_dir, mode=0o700, exist_ok=True)
+        self.auth = AuthBlocks(os.path.join(self.state_dir, 'auth-blocks.json'))
         self._spool = None
         self._spool_lock = threading.Lock()
         self._wake = threading.Event()
@@ -66,6 +67,16 @@ class AgentContext:
 
     def counter(self, name, n=1):
         self.health_.count(name, n)
+
+    def auth_failed(self, device, credential, rev=None, message=''):
+        """The device refused the credential: never try it again until a tech clears it."""
+        if self.auth.failed(device, credential, rev, message):
+            self.counter('auth_blocked')
+            self.error(f'login to {device} with {credential} failed: {message}; not trying again until cleared')
+            self.host.report_soon()
+
+    def may_login(self, device, credential, rev=None):
+        return self.auth.may_login(device, credential, rev)
 
     def gauge(self, name, value):
         self.health_.gauge(name, value)
@@ -354,6 +365,10 @@ class PluginHost:
         self._reload.set()
         return {'ok': True}
 
+    def report_soon(self):
+        """A new failed login: the hosted side should hear of it now, not in half a minute."""
+        self.agent._report_at = None
+
     def _run(self):
         while not self._stop.is_set():
             wait = PULL_EVERY
@@ -396,6 +411,11 @@ class PluginHost:
             run = self.running.get(pid)
         if run is None:
             raise PluginError(self.failed.get(pid) or f'{pid} is not running on this agent')
+        if way == 'unblock':
+            p = params if isinstance(params, dict) else {}
+            cleared = run.ctx.auth.clear(p.get('device'), p.get('credential'))
+            run.ctx.log(f"login to {p.get('device')} cleared by the hosted Floorbit ({cleared})")
+            return {'cleared': cleared}
         listed = run.config.get('calls' if way == 'call' else 'actions') or [] if way in ('call', 'action') else []
         if name not in listed:
             raise PluginError(f'{pid} has no agent {way} {name}')
@@ -420,7 +440,7 @@ class PluginHost:
         for pid, run in running.items():
             h = run.ctx.health_.report()
             h['metrics'] = {**h['metrics'], 'backlog': run.ctx.backlog()}
-            out[pid] = {**h, 'running': True}
+            out[pid] = {**h, 'running': True, 'auth_blocked': run.ctx.auth.list()}
         for pid, why in failed.items():
             out[pid] = {'status': 'error', 'message': why, 'metrics': {}, 'errors': [], 'running': False}
         return out
