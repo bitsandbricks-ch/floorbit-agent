@@ -249,3 +249,88 @@ def test_failed_logins_are_not_tried_again_until_cleared(setup, tmp_path):
     assert not AuthBlocks(ctx.auth.path).may_login("sw-a-01", "ssh-ops", 3)
     assert host.call(["hallthing", "unblock", "", {"device": "sw-a-01", "credential": "ssh-ops"}]) == {"cleared": 1}
     assert ctx.may_login("sw-a-01", "ssh-ops", 3) and agent.report()["plugins"]["hallthing"]["auth_blocked"] == []
+
+
+def _self_signed(folder):
+    import datetime
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "agent.example.com")])
+    now = datetime.datetime.now(datetime.UTC)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(minutes=1))
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False)
+            .sign(key, hashes.SHA256()))
+    (folder / "cert.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (folder / "key.pem").write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                                       serialization.NoEncryption()))
+    return str(folder / "cert.pem"), str(folder / "key.pem")
+
+
+def test_a_listener_can_serve_tls_when_the_hall_gave_a_certificate(setup, tmp_path):
+    import ssl
+    host, _hosted, _agent, lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    plain = ctx.listen_http(0, lambda *a: (204, b""), host="127.0.0.1", tls=True)      # no cert: plain
+    assert ctx.tls is False and any("plain HTTP" in line for line in lines)
+    assert urllib.request.urlopen(f"http://127.0.0.1:{plain}/", timeout=5).status == 204
+    cert, key = _self_signed(tmp_path)
+    host.env = {"FLOORBIT_AGENT_TLS_CERT": cert, "FLOORBIT_AGENT_TLS_KEY": key}
+    port = ctx.listen_http(0, lambda m, p, h, b: (200, h.get("Authorization", "")), host="127.0.0.1", tls=True)
+    assert ctx.tls is True
+    trust = ssl.create_default_context(cafile=cert)
+    req = urllib.request.Request(f"https://127.0.0.1:{port}/write", data=b"x", headers={"Authorization": "Token t"})
+    assert urllib.request.urlopen(req, timeout=5, context=trust).read() == b"Token t"
+    with pytest.raises(OSError):        # plain HTTP to a TLS listener gets nowhere
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5)
+    host.env = {"FLOORBIT_AGENT_TLS_CERT": str(tmp_path / "missing.pem"), "FLOORBIT_AGENT_TLS_KEY": key}
+    from floorbit.plugins.base import PluginError
+    with pytest.raises(PluginError, match="cannot use the TLS certificate"):
+        ctx.listen_http(0, lambda *a: (204, b""), host="127.0.0.1", tls=True)
+
+
+class FakeRegistry:
+    def __init__(self, store, on=()):
+        self.settings_store = store
+        self.specs = {pid: object() for pid in ("librenms", "netbox", "pihole")}
+        self.on = set(on)
+
+    def enabled(self, spec):
+        return any(self.specs[p] is spec for p in self.on)
+
+    def set_enabled(self, pid, on):
+        (self.on.add if on else self.on.discard)(pid)
+
+
+def test_plugins_without_an_agent_part_follow_the_hosted_side(tmp_path):
+    import flask
+    from floorbit.runtime import rt
+    from floorbit.settings import SettingsStore
+
+    from floorbit_agent.plugin_host import LocalPlugins
+    store = SettingsStore(str(tmp_path / "data.json"), environ={"LIBRENMS_TOKEN": "hall-token"})
+    registry = FakeRegistry(store, on={"netbox"})
+    lines = []
+    local = LocalPlugins(flask.Flask("t"), registry, str(tmp_path), pinned=["pihole"], log=lines.append)
+    local.apply({"librenms": {"settings": {"librenms.url": "https://librenms.example.com", "librenms.token": "hosted"}},
+                 "pihole": {"settings": {}}, "unifi": {"settings": {}}})
+    assert registry.on == {"netbox", "librenms", "pihole"}
+    # Settings from the hosted side, kept in memory; the agent's own env still wins.
+    assert rt.librenms_url == "https://librenms.example.com" and rt.librenms_token == "hall-token"
+    assert not (tmp_path / "data.json").exists()
+    assert any("unifi, which this agent does not have" in line for line in lines)
+    # Turned off there: off here, except what the hall pinned and what was on before.
+    local.apply({})
+    assert registry.on == {"netbox", "pihole"} and rt.librenms_url == ""
+    # Remembered across a restart.
+    local.apply({"librenms": {"settings": {}}})
+    again = LocalPlugins(flask.Flask("t"), registry, str(tmp_path), log=lines.append)
+    again.apply({})
+    assert "librenms" not in registry.on

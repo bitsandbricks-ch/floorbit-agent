@@ -660,9 +660,9 @@ class Agent:
 
 
 def turn_on(app, names, out=print):
-    """FLOORBIT_AGENT_PLUGINS=http-check,pihole: plugins the agent turns on at start. The agent has
-    no settings page, and only LibreNMS and NetBox are on by default; settings come from
-    FLOORBIT_PLUGIN_<ID>_<KEY> variables as everywhere."""
+    """FLOORBIT_AGENT_PLUGINS=http-check,pihole: plugins the agent turns on at start, whatever the
+    hosted Floorbit says. Otherwise the hosted Floorbit's plugin settings decide (LocalPlugins in
+    plugin_host.py); FLOORBIT_PLUGIN_<ID>_<KEY> variables still win over its settings."""
     from floorbit import sources
     from floorbit.plugins.base import PluginError
     registry = sources.registry
@@ -854,10 +854,11 @@ def start_plugins(agent, app):
     ``check`` it asks once and starts them, so their checks can run."""
     from floorbit import sources
 
-    from .plugin_host import PluginHost, agent_specs
+    from .plugin_host import LocalPlugins, PluginHost, agent_specs
     root = os.environ.get('FLOORBIT_AGENT_STATE') or os.path.dirname(os.path.abspath(
         os.environ.get('FLOORBIT_DATA_FILE', 'agent-data.json')))
-    host = PluginHost(agent, agent_specs(sources.registry), root)
+    local = LocalPlugins(app, sources.registry, root, pinned=os.environ.get('FLOORBIT_AGENT_PLUGINS', '').split(','))
+    host = PluginHost(agent, agent_specs(sources.registry), root, local=local)
     agent.plugins = host
     return host
 
