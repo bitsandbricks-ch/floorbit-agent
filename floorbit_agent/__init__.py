@@ -47,7 +47,7 @@ MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer 
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
            'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe', 'plugin', 'plugins_reload',
-           'switch_call', 'shell_open', 'shell_io', 'shell_close')
+           'switch_call', 'shell_open', 'shell_io', 'shell_close', 'plugin_test')
 # Pools bigger than WORKERS: a switch command runs on many switches at once, and each open terminal
 # keeps one shell_io read waiting on the switch.
 POOL_SIZES = {'switch_call': 8, 'shell_open': 4, 'shell_io': 24}
@@ -212,6 +212,18 @@ def probe_call(method, args, env=None):
         raise PluginError('The probe was asked for wrongly.') from None
 
 
+def plugin_test(registry, args):
+    """Settings > Plugins > Test for a plugin that reaches the event network: run here, where it
+    runs, not on the hosted side."""
+    from floorbit.plugins.base import PluginError
+    plugin_id = str(args[0]) if args else ''
+    spec = registry.active(plugin_id) if registry is not None else None
+    if spec is None:
+        raise PluginError(f'{plugin_id} is not on on the agent yet. It turns on with the settings from the '
+                          'hosted Floorbit within a minute.')
+    return str(registry.call(spec, 'test') or 'OK')[:500]
+
+
 def local_executor(app, plugins_ref=None):
     """Run a call against this machine's monitoring plugin, as the hosted Floorbit would locally.
     ``plugins_ref["host"]``: the PluginHost, for the ``plugin`` calls."""
@@ -253,6 +265,8 @@ def local_executor(app, plugins_ref=None):
                 return switches.call(registry, args)
             if method == 'shell_open':
                 return switches.shells.open(registry, args)
+            if method == 'plugin_test':
+                return plugin_test(registry, args)
             if method == 'health_feeds':
                 return _feeds(registry, registry.feeders('health') if registry is not None else [], 'health_checks')
             spec = registry.monitoring_source() if registry is not None else None
