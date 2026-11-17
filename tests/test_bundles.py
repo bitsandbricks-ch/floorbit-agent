@@ -303,3 +303,24 @@ def test_the_cli_says_how_to_use_it(tmp_path):
     assert cli(["approve", "nothing"], str(tmp_path), out=out.append) == 1
     assert cli([], str(tmp_path), out=out.append) == 0 and out[-1] == "No plugin updates yet."
     assert json.loads(json.dumps(out))
+
+
+@pytest.mark.parametrize("pid, version, file", [
+    ("../../escape", "0.5.0", "hallthing-0.5.0.tar.gz"),
+    ("hallthing", "9/../../../escape", "hallthing-0.5.0.tar.gz"),
+    ("hallthing", "0.5.0", "../hallthing-0.5.0.tar.gz"),
+    ("hallthing", "0.5..0", "hallthing-0.5.0.tar.gz"),
+])
+def test_an_offer_with_a_path_in_it_touches_nothing(hall, pid, version, file):
+    started, hosted, pem, _clock, tmp_path, lines = hall
+    host = started()
+    hosted.publish(tmp_path, pem, "0.5.0")
+    entry = hosted.offer.pop("hallthing")
+    hosted.offer[pid] = {**entry, "version": version, "file": file}
+    hosted.etag += 1
+    canary = tmp_path / "escape"
+    canary.mkdir(exist_ok=True)
+    host.pull()
+    assert runs(host) == "0.4.0"
+    assert canary.exists()
+    assert any("bad id, version or file" in line for line in lines)
