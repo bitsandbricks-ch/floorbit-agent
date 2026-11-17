@@ -91,8 +91,8 @@ def test_syslog_lines_parse_with_their_severity():
     syslog = pytest.importorskip('floorbit.syslog')
     lines = replay.syslog_round(0, time.time())
     parsed = [syslog.parse(line) for _ip, line in lines]
-    by_text = {p['message']: p for p in parsed}
-    link = next(p for m, p in by_text.items() if '%LINK-3-UPDOWN' in m)
+    # Floorbit lifts a Cisco mnemonic out of the message into `program`; older parsers left it in.
+    link = next(p for p in parsed if '%LINK-3-UPDOWN' in p['program'] + p['message'])
     assert link['severity'] == 'err'
     fw = next(p for p in parsed if p['program'] == 'filterlog')
     assert fw['host'].startswith('fw-')
