@@ -89,6 +89,32 @@ def test_a_player_checks_in_and_the_seat_learns_its_port(fb, lab):
     assert row['mac'] == seat.mac
 
 
+def test_the_crew_walk_through_finds_each_seat_port(fb, lab):
+    """Floorbit's seat walk-through (docs/seat-walk.md): a laptop at each seat, Locate, the seat's
+    access port from the core's ARP and the access switch's MAC table, through the agent."""
+    if fb.s.get(f'{fb.url}/api/seat-walk', timeout=30).status_code == 404:
+        pytest.skip('this Floorbit has no seat walk-through yet (FLOORBIT_REF)')
+    seats = [s for s in lab.seats if s.online and s.label.startswith('B-')][:4]
+    previous = None
+    for seat in seats:
+        r = fb.post('/api/seat-walk/locate', {'seat': seat.label, 'previous': previous},
+                    headers={'X-Forwarded-For': seat.ip})
+        assert r.status_code == 200, r.text
+        got = r.json()
+        assert got['ok'] and got['found'] == {'switch': seat.switch, 'port': short(seat.port)}, got
+        assert got['mac'] == seat.mac and got['how'] == 'monitoring'
+        previous = got['found']
+    block = next(b['id'] for b in fb.get('/api/seat-blocks') if b['name'] == 'B')
+    kept = {s['seat']: s['port'] for s in fb.get(f'/api/seat-walk?block={block}')['seats']}
+    assert all(kept[s.label]['port'] == short(s.port) and kept[s.label]['source'] == 'walk' for s in seats)
+    # The last seat's port again (as an old MAC table would say) is never taken for the next seat.
+    stale = fb.post('/api/seat-walk/locate', {'seat': 'B-20', 'previous': previous},
+                    headers={'X-Forwarded-For': seats[-1].ip}).json()
+    assert not stale['ok'] and stale['stale'] and stale['retry']
+    for seat in seats:
+        assert fb.s.delete(f'{fb.url}/api/seat-walk/{seat.label}', timeout=30).status_code == 200
+
+
 def test_ip_and_mac_history_and_search(fb, lab):
     seat = lab.seat('A-7')
     eventually(lambda: any(r['seat'] == seat.label and r['mac'] == seat.mac
