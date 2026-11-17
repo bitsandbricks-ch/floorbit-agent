@@ -96,6 +96,14 @@ blocked. See Floorbit's
 [docs/integrations.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/integrations.md#the-sign-in-to-network-note-captive-portal-api).
 With VRRP, point option 114 at a virtual IP, so the note keeps working when one agent is down.
 
+The same port answers the crew's seat walk-through (Floorbit's
+[docs/seat-walk.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/seat-walk.md)): a
+hosted Floorbit, or one behind NAT, only sees the hall's public address, so the page sends the crew
+laptop once to `/floorbit/hello/<code>` here. The agent reports the laptop's own IP with that one-time
+code and sends the browser back, only ever to the Floorbit in `FLOORBIT_URL`. Set
+`FLOORBIT_AGENT_LAN_URL` to the address laptops in the hall use for this port (for example
+`http://192.0.2.10:8908`), and the page finds it.
+
 ## Security
 
 [docs/threat-model.md](docs/threat-model.md) says what the agent protects, from whom, and how;

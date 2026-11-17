@@ -84,6 +84,11 @@ UDP and sends them on, the flows only as a summary.
   request to the hosted side only (over HTTPS), never in an answer. At most 200 requests are passed
   on at once (more get 503), bodies over 32 MB are refused, and the speed test answered here shares
   Floorbit's per-client byte budget and its cap of streams at once.
+- **Send a seat walk-through hello** (`/floorbit/hello/<code>` on the same port): without a code the
+  crew got from a signed-in Floorbit page in the last ten minutes, the hosted side refuses it. A code
+  is used once. With a stolen code an attendee could only make that walk-through step find their own
+  seat's port, which the crew sees on the page. The redirect back goes only to the `FLOORBIT_URL`
+  origin, so the endpoint is no open redirect, and its page escapes everything it shows.
 - **Flood the UDP ports:** the syslog backlog has a fixed size, the newest lines are dropped and
   counted (`floorbit_agent_syslog_dropped_total`), and memory stays bounded.
 - **Read the report:** the half-minute report to the hosted Floorbit carries the same kind of counts
