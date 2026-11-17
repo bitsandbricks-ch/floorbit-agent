@@ -51,6 +51,12 @@ HELP = {
     'floorbit_agent_flows_packets_total': ('counter', 'NetFlow/IPFIX packets received from the event network.'),
     'floorbit_agent_flows_snapshots_sent_total': ('counter', 'Flow snapshots sent to the hosted Floorbit.'),
     'floorbit_agent_flows_failing': ('gauge', '1 while sending flow snapshots fails.'),
+    'floorbit_agent_captive_answers_total': ('counter', 'Captive portal answers, by answer '
+                                             '(captive: the note shows, done: it does not).'),
+    'floorbit_agent_captive_checked_in': ('gauge',
+                                          'Clients the last list from the hosted Floorbit counts as checked in.'),
+    'floorbit_agent_captive_list_age_seconds': ('gauge', 'Seconds since the hosted Floorbit last sent the list.'),
+    'floorbit_agent_captive_failing': ('gauge', '1 while asking the hosted Floorbit for the list fails.'),
 }
 
 
@@ -163,9 +169,16 @@ class _Timer:
         return False
 
 
-def relay_collector(syslog=None, flows=None):
+def relay_collector(syslog=None, flows=None, captive=None):
     """Gauges and counters from the relays' own numbers (they count for themselves)."""
     def collect(m):
+        if captive:
+            for answer, n in dict(captive.asked).items():
+                m.set('floorbit_agent_captive_answers_total', n, {'answer': answer})
+            m.set('floorbit_agent_captive_checked_in', len(captive.done))
+            if captive.asked_at:
+                m.set('floorbit_agent_captive_list_age_seconds', round(max(0.0, time.time() - captive.asked_at), 1))
+            m.set('floorbit_agent_captive_failing', int(bool(captive.error)))
         if syslog:
             m.set('floorbit_agent_syslog_received_total', getattr(syslog, 'received', 0))
             m.set('floorbit_agent_syslog_sent_total', syslog.sent)

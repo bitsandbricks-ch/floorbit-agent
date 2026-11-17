@@ -9,6 +9,7 @@ All notable changes to this project are listed here. The format follows
 ### Added
 
 - The agent can answer the Captive Portal API (RFC 8908) on the event network (`FLOORBIT_AGENT_CAPTIVE`), for DHCP option 114: phones and laptops show a quiet "sign in to network" note until their seat has checked in on the hosted Floorbit, and nothing is ever blocked. It keeps answering from the last word when the hosted side is away (bitsandbricks-ch/floorbit#473).
+- Captive portal numbers in `/metrics` and the report to the hosted Floorbit: answers by `captive` or `done`, clients checked in, the age of the list and whether asking for it fails. Counts only, never an IP. The log says when the agent starts answering and how many clients the list has.
 - The agent answers `firewall_feeds`: a hosted Floorbit's **Import from NetBox** on Firewalls reads the seat ranges from the event's NetBox through it.
 - The agent answers `dns_probe` and `tcp_probe`, so a hosted Floorbit's services view measures the event's internet lines and resolvers from the event network (bitsandbricks-ch/floorbit#471). Never towards the agent machine or link-local addresses (or only `FLOORBIT_AGENT_PROBE_NETS`); TCP probes only to ports 53, 80, 443 and 853, sending nothing.
 - The agent answers `neighbours`, what each switch sees by LLDP or CDP, for the hosted topology page (bitsandbricks-ch/floorbit#468).
