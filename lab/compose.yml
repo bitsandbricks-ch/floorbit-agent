@@ -150,11 +150,11 @@ services:
 
   agent-a:
     <<: *agent
-    environment: {<<: *agent-env, LAB_AGENT: agent-a}
+    environment: {<<: *agent-env, LAB_AGENT: agent-a, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.31:8908"}
     networks: {lab: {ipv4_address: 172.31.10.31}}
   agent-b:
     <<: *agent
-    environment: {<<: *agent-env, LAB_AGENT: agent-b}
+    environment: {<<: *agent-env, LAB_AGENT: agent-b, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.32:8908"}
     networks: {lab: {ipv4_address: 172.31.10.32}}
 
   e2e:

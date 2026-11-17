@@ -52,7 +52,7 @@ start() {
       FLOORBIT_DATA_FILE="$STATE/$a/agent-data.json" FLOWS_DIR="$STATE/$a/flows" \
       FLOORBIT_AGENT_SYSLOG_PORT=$((5524 + i)) FLOORBIT_AGENT_FLOWS_PORT=$((2065 + i)) \
       FLOORBIT_AGENT_METRICS=127.0.0.1:$((9520 + i)) FLOORBIT_AGENT_CAPTIVE=127.0.0.1:$((8908 + i)) \
-      FLOORBIT_AGENT_CAPTIVE_PROXIES=127.0.0.1 \
+      FLOORBIT_AGENT_CAPTIVE_PROXIES=127.0.0.1 FLOORBIT_AGENT_LAN_URL=http://127.0.0.1:$((8908 + i)) \
       $PY -m floorbit_agent) > "$STATE/$a.log" 2>&1 &
     echo $! > "$STATE/$a.pid"
     i=$((i + 1))
