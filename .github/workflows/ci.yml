@@ -87,10 +87,44 @@ jobs:
           pip install --quiet actionlint-py
           actionlint -color
 
+  lab:
+    # The hardware-free test lab (docs/lab/README.md): Floorbit, two agents, the lab LibreNMS and the
+    # simulated switches, end to end; then agent A goes away and agent B has to carry on.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: ref
+        run: echo "floorbit=$(tr -d '[:space:]' < FLOORBIT_REF)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bitsandbricks-ch/floorbit
+          ref: ${{ steps.ref.outputs.floorbit }}
+          path: floorbit-src
+      - name: Start the lab
+        env:
+          LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
+        run: docker compose -f lab/compose.yml up -d --build --wait --wait-timeout 600
+      - name: End-to-end tests
+        env:
+          LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
+        run: docker compose -f lab/compose.yml run --rm e2e
+      - name: Failover (agent A stopped)
+        env:
+          LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
+        run: |
+          docker compose -f lab/compose.yml stop agent-a
+          docker compose -f lab/compose.yml run --rm -e LAB_AGENT_DOWN=agent-a e2e
+      - name: Lab logs
+        if: failure()
+        env:
+          LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
+        run: docker compose -f lab/compose.yml logs --no-color --tail 300
+
   ci-passed:
     name: CI passed
     if: always()
-    needs: [python, vrrp, node, workflows]
+    needs: [python, vrrp, node, workflows, lab]
     runs-on: ubuntu-24.04
     steps:
       - env:
