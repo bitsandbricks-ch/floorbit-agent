@@ -46,7 +46,11 @@ REPORT_EVERY = 30         # seconds between reports to the hosted side (its Loca
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
-           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe', 'plugin', 'plugins_reload')
+           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe', 'plugin', 'plugins_reload',
+           'switch_call', 'shell_open', 'shell_io', 'shell_close')
+# Pools bigger than WORKERS: a switch command runs on many switches at once, and each open terminal
+# keeps one shell_io read waiting on the switch.
+POOL_SIZES = {'switch_call': 8, 'shell_open': 4, 'shell_io': 24}
 
 
 def _within(seconds, open_it, late=None):
@@ -114,13 +118,23 @@ def game_target(host, env=None):
     """The address to ask a game server at, if it may be asked. The hosted side names the host, so
     the agent only reaches private addresses (or FLOORBIT_AGENT_GAME_NETS): a hosted Floorbit that
     was taken over can't use the agent to reach the internet or this machine's own ports."""
+    return _private_target(host, 'FLOORBIT_AGENT_GAME_NETS', 'ask game servers on', env)
+
+
+def switch_target(host, env=None):
+    """The address to open a switch login to (switches.py): private addresses only, or
+    FLOORBIT_AGENT_SWITCH_NETS, for the same reason as game servers."""
+    return _private_target(host, 'FLOORBIT_AGENT_SWITCH_NETS', 'log in to switches on', env)
+
+
+def _private_target(host, nets_var, what, env=None):
     import ipaddress
     import socket
 
     from floorbit.plugins.base import PluginError
     env = os.environ if env is None else env
     nets = [ipaddress.ip_network(n.strip(), strict=False)
-            for n in (env.get('FLOORBIT_AGENT_GAME_NETS') or '').split(',') if n.strip()]
+            for n in (env.get(nets_var) or '').split(',') if n.strip()]
     try:
         addrs = {info[4][0] for info in socket.getaddrinfo(str(host), None, proto=socket.IPPROTO_TCP)}
     except (OSError, UnicodeError):
@@ -132,8 +146,8 @@ def game_target(host, env=None):
         inside = _inside(ip)
         if any(ip in net for net in nets) if nets else (ip.is_private and (inside is None or inside.is_private)):
             return str(ip)
-    raise PluginError(f'{host} is not on a network the agent may ask game servers on '
-                      '(private addresses, or FLOORBIT_AGENT_GAME_NETS).')
+    raise PluginError(f'{host} is not on a network the agent may {what} '
+                      f'(private addresses, or {nets_var}).')
 
 
 def game_call(method, args, env=None):
@@ -206,12 +220,18 @@ def local_executor(app, plugins_ref=None):
     def execute(method, args):
         from floorbit import sources
         from floorbit.plugins.base import PluginError
+
+        from . import switches
         if method not in METHODS:
             raise PluginError(f'{method} is not something the agent answers')
         if method in ('game_query', 'game_rcon'):
             return game_call(method, args)
         if method in ('dns_probe', 'tcp_probe'):
             return probe_call(method, args)
+        if method == 'shell_io':          # no app context: it only reads and writes an open shell
+            return switches.shells.io(args)
+        if method == 'shell_close':
+            return switches.shells.close(args)
         if method in ('plugin', 'plugins_reload'):
             host = plugins_ref.get('host')
             if host is None:
@@ -229,6 +249,10 @@ def local_executor(app, plugins_ref=None):
                 return wifi_feeds(registry)
             if method == 'dns_feeds':
                 return dns_feeds(registry, *args)
+            if method == 'switch_call':
+                return switches.call(registry, args)
+            if method == 'shell_open':
+                return switches.shells.open(registry, args)
             if method == 'health_feeds':
                 return _feeds(registry, registry.feeders('health') if registry is not None else [], 'health_checks')
             spec = registry.monitoring_source() if registry is not None else None
@@ -508,7 +532,8 @@ class Agent:
                 self._waiting[method] = self._waiting.get(method, 0) + 1
                 pool = self._pools.get(method)
                 if pool is None:
-                    pool = self._pools[method] = ThreadPoolExecutor(WORKERS, thread_name_prefix=f'agent-{method}')
+                    pool = self._pools[method] = ThreadPoolExecutor(POOL_SIZES.get(method, WORKERS),
+                                                                    thread_name_prefix=f'agent-{method}')
         if busy:
             self.metrics.inc('floorbit_agent_calls_total', {'method': method, 'outcome': 'busy'})
             self._answer(call, {'id': call.get('id'), 'ok': False,
@@ -600,6 +625,8 @@ class Agent:
 
     def stop(self):
         self._stop.set()
+        from .switches import shells
+        shells.close_all()          # an SSH session must not outlive the agent
         for pool in list(self._pools.values()):
             pool.shutdown(wait=False, cancel_futures=True)
         ws = self._ws

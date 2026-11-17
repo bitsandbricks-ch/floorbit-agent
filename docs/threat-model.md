@@ -46,10 +46,18 @@ UDP and sends them on, the flows only as a summary.
   and resolvers usually are, but never to the agent machine or link-local addresses (or only to
   `FLOORBIT_AGENT_PROBE_NETS` when set). A TCP probe only connects to port 53, 80, 443 or 853, at
   most ten times, and sends nothing; a DNS probe sends one A query. Neither can talk to a service.
-  Port actions and SSH are not part of the agent today. When they come
-  (bitsandbricks-ch/floorbit#474), each will be its own method with its own checks, and its
-  credentials will be sent per call and never stored on the agent.
-- **Flood the agent:** at most `WORKERS` calls of one kind run at a time, and at most `MAX_WAITING`
+  Switch SSH (`switch_call`, `shell_open`, `shell_io`, `shell_close`, floorbit_agent/switches.py)
+  runs only the port plugin's own methods (`bounce_port`, `set_port`, `send_commands`, a shell):
+  which commands a template may send is decided by the hosted side's role checks, so a taken-over
+  hosted Floorbit can do on the switches what an admin there could, with the logins it holds, and
+  every such call is in its audit log. It can't send the agent anywhere else: switches are reached
+  only at private addresses, or `FLOORBIT_AGENT_SWITCH_NETS` when set, never this machine. The login
+  comes with the call and is cleared when the connection is done; it is never kept, logged or
+  written to the agent's disk. Host keys are pinned on the hosted side and checked here; a changed
+  key stops the call before anything is sent. At most `MAX_SHELLS` (10) shells are open, and one
+  nobody reads for 90 seconds is closed.
+- **Flood the agent:** at most `WORKERS` calls of one kind run at a time (more for switch calls and
+  terminals, `POOL_SIZES`), and at most `MAX_WAITING`
   wait. Anything more gets a "busy" answer at once, so memory can't grow without end and one slow
   kind can't hold up the others.
 - **Get the LibreNMS/NetBox tokens:** they are never sent. The hosted side gets answers, not
