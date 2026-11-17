@@ -313,6 +313,7 @@ class Agent:
     def __init__(self, url, key, execute, http=None, version='0', log=print):
         import requests
         self.url = url.rstrip('/')
+        self.lan_url = os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
         self.key = key
         self.execute = execute
         self.http = http or requests.Session()
@@ -451,6 +452,8 @@ class Agent:
             'syslog_dropped': m.get('floorbit_agent_syslog_dropped_total'),
             'syslog_backlog': m.get('floorbit_agent_syslog_backlog'),
             'flows_packets': m.get('floorbit_agent_flows_packets_total'),
+            # Where laptops in the hall reach this agent, for Floorbit's seat walk-through.
+            **({'lan_url': self.lan_url} if self.lan_url else {}),
             **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
             **({'updates': self.plugins.updater.report()}
                if getattr(self.plugins, 'updater', None) is not None else {}),
@@ -575,6 +578,13 @@ class Agent:
         """Which client IPs are done, for the Captive Portal API (captive.py). RuntimeError: check-in is off."""
         return self._said(self.http.get(f'{self.url}/api/agent/v1/captive', headers=self._headers(),
                                         timeout=HTTP_TIMEOUT))
+
+    def seat_walk_hello(self, token, ip):
+        """The crew laptop with this walk-through code is at ``ip`` (captive.py's hello)."""
+        resp = self._post('/api/agent/v1/seat-walk', {'token': token, 'ip': ip})
+        if resp.status_code == 404:
+            raise RuntimeError((resp.json() or {}).get('error') or 'this Floorbit has no seat walk-through')
+        return self._check(resp)
 
     def send_flows(self, snapshot):
         return self._said(self._post('/api/agent/v1/flows', {'snapshot': snapshot}))
@@ -809,7 +819,8 @@ def start_captive(agent, env, out=print):
     if not address or address.lower() == 'off':
         return None
     api = captive.Captive(agent.captive_state, env.get('FLOORBIT_AGENT_CAPTIVE_PORTAL_URL', ''),
-                          [p for p in env.get('FLOORBIT_AGENT_CAPTIVE_PROXIES', '').split(',') if p.strip()], log=out)
+                          [p for p in env.get('FLOORBIT_AGENT_CAPTIVE_PROXIES', '').split(',') if p.strip()], log=out,
+                          say_hello=agent.seat_walk_hello, floorbit_url=agent.url)
     try:
         server = captive.serve(api, address, log=out)
     except (ValueError, OSError, OverflowError) as exc:

@@ -68,6 +68,11 @@ UDP and sends them on, the flows only as a summary.
   the check-in page. The list of checked-in IPs never leaves the agent. `X-Forwarded-For` is
   believed only from the addresses in `FLOORBIT_AGENT_CAPTIVE_PROXIES`, so a client can't ask about
   another IP. A wrong answer can only show or hide the note: nothing is blocked either way.
+- **Send a seat walk-through hello** (`/floorbit/hello/<code>` on the same port): without a code the
+  crew got from a signed-in Floorbit page in the last ten minutes, the hosted side refuses it. A code
+  is used once. With a stolen code an attendee could only make that walk-through step find their own
+  seat's port, which the crew sees on the page. The redirect back goes only to the `FLOORBIT_URL`
+  origin, so the endpoint is no open redirect, and its page escapes everything it shows.
 - **Flood the UDP ports:** the syslog backlog has a fixed size, the newest lines are dropped and
   counted (`floorbit_agent_syslog_dropped_total`), and memory stays bounded.
 - **Read the report:** the half-minute report to the hosted Floorbit carries the same kind of counts
