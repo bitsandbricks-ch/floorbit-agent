@@ -93,7 +93,7 @@ def test_ip_and_mac_history_and_search(fb, lab):
     seat = lab.seat('A-7')
     eventually(lambda: any(r['seat'] == seat.label and r['mac'] == seat.mac
                            for r in fb.get('/api/checkins/history')['rows']), what='the check-in history')
-    for query in (seat.mac, seat.ip):
+    for query in (seat.mac, seat.mac.replace(':', ''), seat.ip):
         found = fb.get('/api/seats/find', params={'q': query})['results']
         assert any(f['seat'] == seat.label and f.get('port') == short(seat.port) for f in found), (query, found)
     found = fb.get('/api/seats/find', params={'q': seat.nick})['results']
