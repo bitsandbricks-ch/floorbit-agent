@@ -53,6 +53,7 @@ class AgentContext:
         self._spool = None
         self._spool_lock = threading.Lock()
         self._wake = threading.Event()
+        self._send_lock = threading.Lock()     # one sender at a time: a record goes out once
 
     # logging and health ---------------------------------------------------------------
     def log(self, message):
@@ -109,16 +110,19 @@ class AgentContext:
 
     def _sender(self):
         while not self.stopping.is_set():
+            self._wake.clear()              # before sending, so a send() meanwhile isn't missed
             sent = self._send_some()
             if sent is None:                # failed: wait before trying again
-                self._wake.clear()
                 self.stopping.wait(SEND_RETRY)
             elif sent == 0:
                 self._wake.wait(SEND_RETRY)
-                self._wake.clear()
 
     def _send_some(self):
         """Post up to BATCH spooled records, oldest first. None when the hosted side was away."""
+        with self._send_lock:
+            return self._send_batch()
+
+    def _send_batch(self):
         sent = 0
         while sent < BATCH and not self.stopping.is_set():
             got = self._spool.oldest()

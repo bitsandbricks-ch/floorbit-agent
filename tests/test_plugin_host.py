@@ -155,15 +155,14 @@ def test_sends_are_spooled_and_checked(setup):
         time.sleep(0.05)
     assert ctx.backlog() == 1 and hosted.posts == []
     hosted.post_status = 200
-    assert ctx._send_some() == 1 and ctx.backlog() == 0
+    ctx._send_some()                           # the sender thread may be the one that sends it
+    assert ctx.backlog() == 0 and len(hosted.posts) == 1
     url, body = hosted.posts[-1]
     assert url.endswith("/api/agent/v1/plugins/hallthing/stats") and body == {"payload": {"steam": {"hit_bytes": 5}}}
     hosted.post_status = 422                   # refused: dropped, not retried forever
     ctx.send("stats", {"steam": 1})
-    deadline = time.time() + 5
-    while time.time() < deadline and ctx.health_.report()["metrics"].get("rejected") != 1:
-        ctx._wake.set()
-        time.sleep(0.05)
+    ctx._send_some()                           # don't wait out the sender's retry pause
+    assert ctx.health_.report()["metrics"].get("rejected") == 1
     assert ctx.backlog() == 0 and "refused stats (HTTP 422)" in ctx.health_.report()["errors"][-1]["error"]
 
 
