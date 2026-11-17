@@ -20,6 +20,16 @@ network namespaces (as root: `sudo python scripts/vrrp_check.py`).
 The health check asks only the agent itself, never the hosted Floorbit: a VIP on the event network
 must stay up while the uplink is away.
 
+## Primary and standby
+
+The agent holding the first VIP is its hall's **primary**. Agent plugins ask `ctx.primary()`
+before they poll a device or log in to one, and a standby's `may_login` always says no: two agents
+never poll the same switch or try the same login, so no account is locked twice as fast. Listeners
+(syslog, NetFlow, Telegraf) run on every agent, and the hosted Floorbit keeps a line that reached
+both once. When the primary goes, the standby takes the first VIP and starts polling within
+seconds. The hosted Local agents page shows each hall's primary, the VIPs each agent holds, and
+whether failover is ready. Without VRRP every agent counts as primary.
+
 ## Three ways to run it
 
 ### 1. keepalived in the agent image (simplest)
