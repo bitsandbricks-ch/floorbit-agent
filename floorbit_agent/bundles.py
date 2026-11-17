@@ -3,7 +3,7 @@
 The hosted side lists, with the plugins' settings, a bundle for each plugin it runs (``bundles``).
 This agent installs one only when all of these hold:
 
-* its signature verifies against a key built into this image (floorbit/keys/agent-plugins/);
+* its signature verifies against a key built into this image (floorbit/keys/plugins/);
   the hosted side holds no key, so a stolen hosted login can't make one;
 * it is newer than what runs here (the image's own copy or an earlier bundle): never a downgrade;
 * it needs no newer agent (``agent_api``) and wasn't rolled back here before;
@@ -48,6 +48,9 @@ class Updater:
         self.state_path = self.root / 'state.json'
         self.approved_path = self.root / 'approved.json'
         self.builtin = {}        # plugin id -> the image's own Spec, to go back to
+        # Plugins the image itself has. Others (from the Marketplace, docs/marketplace.md in Floorbit)
+        # have versions of their own, so nothing here counts as newer than them.
+        self.in_image = set(getattr(registry, 'specs', {}) or {})
         self.events = []         # the last rollouts, for the report and the hosted audit log
         self._lock = threading.RLock()
         self.state = self._read(self.state_path, {})
@@ -74,7 +77,10 @@ class Updater:
     # what runs -----------------------------------------------------------------------------
     def running_version(self, pid):
         current = (self.state.get(pid) or {}).get('current')
-        return current or self.image_version
+        return current or self.image_version_of(pid)
+
+    def image_version_of(self, pid):
+        return self.image_version if pid in self.in_image else '0'
 
     def _event(self, pid, what, version, detail=''):
         ev = {'at': int(self.clock()), 'plugin': pid, 'event': what, 'version': str(version), 'detail': detail[:300]}
@@ -121,7 +127,7 @@ class Updater:
                     continue
                 path = self.root / pid / version
                 try:
-                    if not self.b.newer(version, self.image_version):
+                    if not self.b.newer(version, self.image_version_of(pid)):
                         raise self.b.BundleError(f'the image already has {self.image_version}')
                     self.b.verify(path, self.keys, pid, version)
                     self._swap(None, pid, self._load(pid, path, version))
@@ -149,8 +155,6 @@ class Updater:
                         entry['pending'] = None
                         changed = True
                     continue
-                if pid not in self.registry.specs and pid not in self.builtin:
-                    pass    # a plugin this image lacks: a bundle brings it
                 if int(b.get('agent_api') or 1) > self._agent_api():
                     self._mark_pending(pid, b, 'needs a newer agent image')
                     changed = True
@@ -215,7 +219,7 @@ class Updater:
         entry.update(previous=entry.get('current'), current=version, pending=None,
                      since=int(self.clock()), probation=True)
         self._swap(host, pid, spec)
-        self._event(pid, 'installed', version, f'was {entry["previous"] or self.image_version}')
+        self._event(pid, 'installed', version, f'was {entry["previous"] or self.image_version_of(pid)}')
 
     # probation -----------------------------------------------------------------------------
     def watch(self, host):
@@ -267,7 +271,7 @@ class Updater:
                 host._stop_one(pid, 'rolled back')
                 host.specs.pop(pid, None)
             self.registry.specs.pop(pid, None)
-        self._event(pid, 'rolled back', bad, f'{why} (now {back or self.image_version})')
+        self._event(pid, 'rolled back', bad, f'{why} (now {back or self.image_version_of(pid)})')
         shutil.rmtree(self.root / pid / bad, ignore_errors=True)
 
     # report --------------------------------------------------------------------------------
@@ -275,7 +279,7 @@ class Updater:
         with self._lock:
             plugins = {}
             for pid, entry in sorted(self.state.items()):
-                plugins[pid] = {'version': entry.get('current') or self.image_version,
+                plugins[pid] = {'version': entry.get('current') or self.image_version_of(pid),
                                 'source': 'bundle' if entry.get('current') else 'image',
                                 'pending': entry.get('pending'), 'probation': bool(entry.get('probation')),
                                 'rolled_back': list(entry.get('bad') or [])}
