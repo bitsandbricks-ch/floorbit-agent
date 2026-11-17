@@ -92,6 +92,13 @@ On Kubernetes, the cluster gives out the address instead: run the agents as a De
 replicas behind a `LoadBalancer` Service, with [kube-vip](https://kube-vip.io) or
 [MetalLB](https://metallb.io) (L2 mode) announcing the Service's IP. Don't use VRRP mode in a pod.
 
+## Telemetry
+
+With the Telemetry plugin on, only the agent holding the **first** VIP collects (polls the devices
+and sends); the others keep Telegraf listening only and take over when that VIP moves. Point the
+devices' traps and model-driven telemetry at the first VIP. Floorbit's docs/telemetry.md, "Two
+agents (VRRP)".
+
 ## Keep it safe
 
 VRRP has no real authentication: anyone on the VLAN can claim a VIP. Keep the agents and their

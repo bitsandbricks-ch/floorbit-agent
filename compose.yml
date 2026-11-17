@@ -24,6 +24,8 @@ services:
       - "127.0.0.1:9520:9520"
     #   - "514:5514/udp"
     #   - "2055:2055/udp"
+    # A firewall's own Telegraf (OPNsense os-telegraf, pfSense) sending to the agent's telemetry listener:
+    #   - "8186:8186"
     # The Captive Portal API (FLOORBIT_AGENT_CAPTIVE=0.0.0.0:8908), for the event's HTTPS reverse proxy:
     #   - "8908:8908"
     # A refused key (revoked or wrong) stops the agent with exit code 1: don't restart it into
@@ -37,6 +39,26 @@ services:
       timeout: 10s
       start_period: 60s
       retries: 2
+
+  # Device telemetry (Floorbit's docs/telemetry.md): turn on the Telemetry plugin in the hosted
+  # Floorbit and add the devices under Settings > Telemetry. The agent writes Telegraf's config
+  # into its state volume and takes what Telegraf collects on port 8186; per-port numbers and
+  # which MAC and IP is on which port go to the hosted Floorbit.
+  #   docker compose --profile telemetry up -d
+  telegraf:
+    image: telegraf:1.40.3
+    profiles: ["telemetry"]
+    # The agent's user, so it can read the config the agent wrote (secrets in it).
+    user: "10001"
+    entrypoint: ["sh", "-c", "until [ -f /app/state/plugins/telemetry/telegraf.conf ]; do sleep 5; done; exec telegraf --config /app/state/plugins/telemetry/telegraf.conf --watch-config notify"]
+    ports:
+      - "${TRAP_PUBLISH_PORT:-162}:1162/udp"   # SNMP traps
+      - "${MDT_PUBLISH_PORT:-57000}:57000"     # Cisco model-driven telemetry, dial-out
+    volumes:
+      - agent_state:/app/state:ro
+    depends_on:
+      - agent
+    restart: unless-stopped
 
 volumes:
   agent_state:
