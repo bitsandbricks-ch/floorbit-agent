@@ -29,6 +29,8 @@ from concurrent.futures import ThreadPoolExecutor
 KEY_HEADER = 'Floorbit-Agent-Key'
 VERSION_HEADER = 'Floorbit-Agent-Version'
 PROTOCOL_HEADER = 'Floorbit-Agent-Protocol'
+# Our clock on every request: the hosted side puts our times right when this box has no NTP.
+CLOCK_HEADER = 'Floorbit-Agent-Clock'
 PROTOCOL = 2              # the newest agent protocol this agent speaks; the hosted side says which it does
 LINK_IDLE = 60            # the hosted side sends something at least every 20 s: quiet this long, it's gone
 LINK_RETRY = 300          # after the link failed, long-poll this long before trying it again
@@ -353,7 +355,8 @@ class Agent:
             m.set('floorbit_agent_last_contact_age_seconds', round(time.time() - self.last_contact, 1))
 
     def _headers(self, json_body=False):
-        h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(self.protocol)}
+        h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(self.protocol),
+             CLOCK_HEADER: f'{time.time():.3f}'}
         if json_body:
             h['Content-Type'] = 'application/json'
         return h
