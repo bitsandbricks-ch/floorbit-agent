@@ -355,8 +355,9 @@ def test_a_latest_kind_keeps_only_the_newest_and_fetches_ask_the_hosted_part(set
     ctx._send_some()
     assert [b for u, b in hosted.posts if u.endswith("/summary")] == [{"payload": {"n": 4}}] and ctx.backlog() == 0
     assert ctx.fetch("seats") == {"seat_of": {"192.0.2.10": "A1"}}
+    from floorbit.plugins.agent import HostedSaidNo
     from floorbit.plugins.base import PluginError
-    with pytest.raises(PluginError, match="Traffic is turned off"):
+    with pytest.raises(HostedSaidNo, match="Traffic is turned off"):
         ctx.fetch("other")
     with pytest.raises(PluginError, match="does not list"):
         ctx.fetch("secrets")

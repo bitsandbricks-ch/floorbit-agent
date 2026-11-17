@@ -474,7 +474,11 @@ class PluginHost:
                 why = (resp.json() or {}).get('error')
             except ValueError:
                 why = None
-            raise PluginError(why or f'the hosted Floorbit answered HTTP {resp.status_code}')
+            why = why or f'the hosted Floorbit answered HTTP {resp.status_code}'
+            if resp.status_code in (404, 409, 422):      # it answered, and said no
+                from floorbit.plugins.agent import HostedSaidNo
+                raise HostedSaidNo(why)
+            raise PluginError(why)
         return (resp.json() or {}).get('data')
 
     # calls from the hosted side ---------------------------------------------------------------
