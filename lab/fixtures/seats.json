@@ -1,0 +1,339 @@
+{
+ "_metadata": {
+  "description": "The lab event (lab/topology.py); made-up players."
+ },
+ "seats": {
+  "A-1": {
+   "username": "player-a01",
+   "ip_address": "10.10.101.11"
+  },
+  "A-2": {
+   "username": "player-a02",
+   "ip_address": "10.10.101.12"
+  },
+  "A-3": {
+   "username": "player-a03",
+   "ip_address": "10.10.101.13"
+  },
+  "A-4": {
+   "username": "player-a04",
+   "ip_address": "10.10.101.14"
+  },
+  "A-6": {
+   "username": "player-a06",
+   "ip_address": "10.10.101.16"
+  },
+  "A-7": {
+   "username": "player-a07",
+   "ip_address": "10.10.101.17"
+  },
+  "A-8": {
+   "username": "player-a08",
+   "ip_address": "10.10.101.18"
+  },
+  "A-9": {
+   "username": "player-a09",
+   "ip_address": "10.10.101.19"
+  },
+  "A-10": {
+   "username": "player-a10",
+   "ip_address": "10.10.101.20"
+  },
+  "A-11": {
+   "username": "player-a11",
+   "ip_address": "10.10.101.21"
+  },
+  "A-12": {
+   "username": "player-a12",
+   "ip_address": "10.10.101.22"
+  },
+  "A-13": {
+   "username": "player-a13",
+   "ip_address": "10.10.101.23"
+  },
+  "A-14": {
+   "username": "player-a14",
+   "ip_address": "10.10.101.24"
+  },
+  "A-15": {
+   "username": "player-a15",
+   "ip_address": "10.10.101.25"
+  },
+  "A-16": {
+   "username": "player-a16",
+   "ip_address": "10.10.101.26"
+  },
+  "A-18": {
+   "username": "player-a18",
+   "ip_address": "10.10.101.28"
+  },
+  "A-19": {
+   "username": "player-a19",
+   "ip_address": "10.10.101.29"
+  },
+  "A-20": {
+   "username": "player-a20",
+   "ip_address": "10.10.101.30"
+  },
+  "A-21": {
+   "username": "player-a21",
+   "ip_address": "10.10.101.31"
+  },
+  "A-22": {
+   "username": "player-a22",
+   "ip_address": "10.10.101.32"
+  },
+  "A-24": {
+   "username": "player-a24",
+   "ip_address": "10.10.101.34"
+  },
+  "B-1": {
+   "username": "player-b01",
+   "ip_address": "10.10.102.11"
+  },
+  "B-2": {
+   "username": "player-b02",
+   "ip_address": "10.10.102.12"
+  },
+  "B-3": {
+   "username": "player-b03",
+   "ip_address": "10.10.102.13"
+  },
+  "B-4": {
+   "username": "player-b04",
+   "ip_address": "10.10.102.14"
+  },
+  "B-6": {
+   "username": "player-b06",
+   "ip_address": "10.10.102.16"
+  },
+  "B-7": {
+   "username": "player-b07",
+   "ip_address": "10.10.102.17"
+  },
+  "B-8": {
+   "username": "player-b08",
+   "ip_address": "10.10.102.18"
+  },
+  "B-9": {
+   "username": "player-b09",
+   "ip_address": "10.10.102.19"
+  },
+  "B-10": {
+   "username": "player-b10",
+   "ip_address": "10.10.102.20"
+  },
+  "B-11": {
+   "username": "player-b11",
+   "ip_address": "10.10.102.21"
+  },
+  "B-12": {
+   "username": "player-b12",
+   "ip_address": "10.10.102.22"
+  },
+  "B-13": {
+   "username": "player-b13",
+   "ip_address": "10.10.102.23"
+  },
+  "B-14": {
+   "username": "player-b14",
+   "ip_address": "10.10.102.24"
+  },
+  "B-15": {
+   "username": "player-b15",
+   "ip_address": "10.10.102.25"
+  },
+  "B-16": {
+   "username": "player-b16",
+   "ip_address": "10.10.102.26"
+  },
+  "B-18": {
+   "username": "player-b18",
+   "ip_address": "10.10.102.28"
+  },
+  "B-19": {
+   "username": "player-b19",
+   "ip_address": "10.10.102.29"
+  },
+  "B-20": {
+   "username": "player-b20",
+   "ip_address": "10.10.102.30"
+  },
+  "B-21": {
+   "username": "player-b21",
+   "ip_address": "10.10.102.31"
+  },
+  "B-22": {
+   "username": "player-b22",
+   "ip_address": "10.10.102.32"
+  },
+  "B-24": {
+   "username": "player-b24",
+   "ip_address": "10.10.102.34"
+  },
+  "C-1": {
+   "username": "player-c01",
+   "ip_address": "10.10.103.11"
+  },
+  "C-2": {
+   "username": "player-c02",
+   "ip_address": "10.10.103.12"
+  },
+  "C-3": {
+   "username": "player-c03",
+   "ip_address": "10.10.103.13"
+  },
+  "C-4": {
+   "username": "player-c04",
+   "ip_address": "10.10.103.14"
+  },
+  "C-6": {
+   "username": "player-c06",
+   "ip_address": "10.10.103.16"
+  },
+  "C-7": {
+   "username": "player-c07",
+   "ip_address": "10.10.103.17"
+  },
+  "C-8": {
+   "username": "player-c08",
+   "ip_address": "10.10.103.18"
+  },
+  "C-9": {
+   "username": "player-c09",
+   "ip_address": "10.10.103.19"
+  },
+  "C-10": {
+   "username": "player-c10",
+   "ip_address": "10.10.103.20"
+  },
+  "C-11": {
+   "username": "player-c11",
+   "ip_address": "10.10.103.21"
+  },
+  "C-12": {
+   "username": "player-c12",
+   "ip_address": "10.10.103.22"
+  },
+  "C-13": {
+   "username": "player-c13",
+   "ip_address": "10.10.103.23"
+  },
+  "C-14": {
+   "username": "player-c14",
+   "ip_address": "10.10.103.24"
+  },
+  "C-15": {
+   "username": "player-c15",
+   "ip_address": "10.10.103.25"
+  },
+  "C-16": {
+   "username": "player-c16",
+   "ip_address": "10.10.103.26"
+  },
+  "C-18": {
+   "username": "player-c18",
+   "ip_address": "10.10.103.28"
+  },
+  "C-19": {
+   "username": "player-c19",
+   "ip_address": "10.10.103.29"
+  },
+  "C-20": {
+   "username": "player-c20",
+   "ip_address": "10.10.103.30"
+  },
+  "C-21": {
+   "username": "player-c21",
+   "ip_address": "10.10.103.31"
+  },
+  "C-22": {
+   "username": "player-c22",
+   "ip_address": "10.10.103.32"
+  },
+  "C-24": {
+   "username": "player-c24",
+   "ip_address": "10.10.103.34"
+  },
+  "D-1": {
+   "username": "player-d01",
+   "ip_address": "10.10.104.11"
+  },
+  "D-2": {
+   "username": "player-d02",
+   "ip_address": "10.10.104.12"
+  },
+  "D-3": {
+   "username": "player-d03",
+   "ip_address": "10.10.104.13"
+  },
+  "D-4": {
+   "username": "player-d04",
+   "ip_address": "10.10.104.14"
+  },
+  "D-6": {
+   "username": "player-d06",
+   "ip_address": "10.10.104.16"
+  },
+  "D-7": {
+   "username": "player-d07",
+   "ip_address": "10.10.104.17"
+  },
+  "D-8": {
+   "username": "player-d08",
+   "ip_address": "10.10.104.18"
+  },
+  "D-9": {
+   "username": "player-d09",
+   "ip_address": "10.10.104.19"
+  },
+  "D-10": {
+   "username": "player-d10",
+   "ip_address": "10.10.104.20"
+  },
+  "D-11": {
+   "username": "player-d11",
+   "ip_address": "10.10.104.21"
+  },
+  "D-13": {
+   "username": "player-d13",
+   "ip_address": "10.10.104.23"
+  },
+  "D-14": {
+   "username": "player-d14",
+   "ip_address": "10.10.104.24"
+  },
+  "D-15": {
+   "username": "player-d15",
+   "ip_address": "10.10.104.25"
+  },
+  "D-16": {
+   "username": "player-d16",
+   "ip_address": "10.10.104.26"
+  },
+  "D-18": {
+   "username": "player-d18",
+   "ip_address": "10.10.104.28"
+  },
+  "D-19": {
+   "username": "player-d19",
+   "ip_address": "10.10.104.29"
+  },
+  "D-20": {
+   "username": "player-d20",
+   "ip_address": "10.10.104.30"
+  },
+  "D-21": {
+   "username": "player-d21",
+   "ip_address": "10.10.104.31"
+  },
+  "D-22": {
+   "username": "player-d22",
+   "ip_address": "10.10.104.32"
+  },
+  "D-24": {
+   "username": "player-d24",
+   "ip_address": "10.10.104.34"
+  }
+ }
+}

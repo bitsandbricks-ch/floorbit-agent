@@ -122,6 +122,9 @@ pip install -r ../floorbit/requirements.txt -e ".[dev]"
 ruff check . && pytest -q          # tests find ../floorbit, or set FLOORBIT_SRC
 ```
 
+The test lab runs Floorbit, two agents and a simulated event network (Nexus core, Catalyst
+switches, firewalls, LAN cache) without any event hardware: see [docs/lab](docs/lab/README.md).
+
 Pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Coding agents follow
 [AGENTS.md](AGENTS.md). Security problems go through a private report, see [SECURITY.md](SECURITY.md).
 

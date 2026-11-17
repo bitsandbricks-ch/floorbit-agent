@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- A test lab (`lab/`, `docs/lab/`): a hosted Floorbit, two agents, a lab LibreNMS and a simulated event network (a Nexus core, a Catalyst 4500, four 2960-X, two OPNsense firewalls, a LAN cache) with syslog, traps and NetFlow on a loop, and end-to-end tests from seat lookup and check-in to agent failover. CI runs it on every pull request. `docs/lab/capture.md` lists what to record from real gear, and `lab/tools/anonymise.py` strips it before it is shared.
 - The agent can answer the Captive Portal API (RFC 8908) on the event network (`FLOORBIT_AGENT_CAPTIVE`), for DHCP option 114: phones and laptops show a quiet "sign in to network" note until their seat has checked in on the hosted Floorbit, and nothing is ever blocked. It keeps answering from the last word when the hosted side is away (bitsandbricks-ch/floorbit#473).
 - The agent answers `firewall_feeds`: a hosted Floorbit's **Import from NetBox** on Firewalls reads the seat ranges from the event's NetBox through it.
 - The agent answers `dns_probe` and `tcp_probe`, so a hosted Floorbit's services view measures the event's internet lines and resolvers from the event network (bitsandbricks-ch/floorbit#471). Never towards the agent machine or link-local addresses (or only `FLOORBIT_AGENT_PROBE_NETS`); TCP probes only to ports 53, 80, 443 and 853, sending nothing.
@@ -27,6 +28,7 @@ All notable changes to this project are listed here. The format follows
 ### Changed
 
 - Built and tested on Floorbit with the night's work in it (`FLOORBIT_REF`).
+- `FLOORBIT_REF` moves to current Floorbit: with the older commit a seat could resolve to the core's uplink instead of its own access port, which the lab caught.
 - The work from #8 to #15 reaches `main`: those pull requests were merged into stack branches that had already gone in.
 
 ### Fixed

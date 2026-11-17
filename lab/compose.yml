@@ -1,0 +1,178 @@
+# The hardware-free test lab (docs/lab/README.md): a hosted Floorbit, two agents, and the event
+# network simulated around them. From the repository root:
+#
+#   docker compose -f lab/compose.yml up -d --build --wait
+#   docker compose -f lab/compose.yml run --rm e2e        # the end-to-end tests
+#   open http://localhost:8080 (admin / lab-admin-password)
+#   docker compose -f lab/compose.yml down -v
+#
+# The Floorbit side is built from a checkout of bitsandbricks-ch/floorbit next to this repository
+# (LAB_FLOORBIT_SRC); the agents from this repository, on the Floorbit commit in FLOORBIT_REF.
+# Every address below is the lab's own (172.31.10.0/24); the devices' are in lab/topology.py.
+
+x-device: &device
+  build: {context: ., dockerfile: Dockerfile}
+  image: floorbit-lab:local
+  command: ["sh", "/lab/device.sh"]
+  environment: &device-env
+    LAB_SYSLOG_TARGETS: 172.31.10.31:5514,172.31.10.32:5514
+    LAB_TRAP_TARGETS: ${LAB_TRAP_TARGETS:-}
+    LAB_REPLAY_EVERY: "10"
+  restart: unless-stopped
+
+x-agent: &agent
+  build: {context: .., dockerfile: Dockerfile}
+  image: floorbit-agent:lab
+  # The key comes from the enrol step, through a file: an agent reads it from the environment.
+  entrypoint: ["sh", "-c", "FLOORBIT_AGENT_KEY=$$(cat /keys/$$LAB_AGENT.key) exec python -m floorbit_agent"]
+  environment: &agent-env
+    FLOORBIT_URL: http://172.31.10.2:5000
+    # Plain HTTP inside the lab network only; at an event it is always https://.
+    FLOORBIT_AGENT_INSECURE: "1"
+    LIBRENMS_URL: http://172.31.10.5:8000
+    LIBRENMS_TOKEN: lab-librenms-token
+    FLOORBIT_AGENT_SYSLOG_PORT: "5514"
+    FLOORBIT_AGENT_FLOWS_PORT: "2055"
+    FLOORBIT_AGENT_CAPTIVE: 0.0.0.0:8908
+    # The tests ask as a reverse proxy would, naming the player in X-Forwarded-For.
+    FLOORBIT_AGENT_CAPTIVE_PROXIES: 172.31.10.60
+  volumes:
+    - keys:/keys:ro
+    - lancache:/lancache:ro
+  depends_on:
+    setup: {condition: service_completed_successfully}
+    librenms: {condition: service_healthy}
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7-alpine
+    networks: {lab: {ipv4_address: 172.31.10.3}}
+    healthcheck: {test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10}
+
+  floorbit:
+    build: {context: "${LAB_FLOORBIT_SRC:-../../floorbit}"}
+    image: floorbit:lab
+    ports: ["127.0.0.1:${LAB_PORT:-8080}:5000"]
+    environment:
+      REDIS_HOST: 172.31.10.3
+      SECRET_KEY: lab-only-not-a-secret
+      AUTH_ADMIN_USER: admin
+      AUTH_ADMIN_PASSWORD: lab-admin-password
+      PUBLIC_URL: http://localhost:${LAB_PORT:-8080}
+      # The seat source: who sits where with which IP (lab/fixtures/seats.json, from topology.py).
+      SEAT_SOURCE_JSON_PATH: /lab/seats.json
+      SYSLOG_ENABLED: "true"
+      SYSLOG_ALLOW: 172.31.10.0/24
+      CHECKIN_ENABLED: "true"
+      # The tests check in as players: they say which seat IP they are with X-Forwarded-For.
+      CHECKIN_TRUST_PROXY: "true"
+      # The agents' "sign in to network" note (Captive Portal API).
+      CAPTIVE_ENABLED: "true"
+    volumes:
+      - ./fixtures/seats.json:/lab/seats.json:ro
+    networks: {lab: {ipv4_address: 172.31.10.2}}
+    depends_on: {redis: {condition: service_healthy}}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/healthz', timeout=5)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  setup:
+    image: floorbit-lab:local
+    build: {context: ., dockerfile: Dockerfile}
+    command: ["python", "/lab/e2e/setup.py", "--url", "http://172.31.10.2:5000", "--out", "/keys", "agent-a", "agent-b"]
+    environment: {AUTH_ADMIN_USER: admin, AUTH_ADMIN_PASSWORD: lab-admin-password}
+    volumes: ["keys:/keys"]
+    networks: {lab: {ipv4_address: 172.31.10.4}}
+    depends_on: {floorbit: {condition: service_healthy}}
+
+  librenms:
+    image: floorbit-lab:local
+    build: {context: ., dockerfile: Dockerfile}
+    command: ["python", "/lab/librenms_lite/server.py"]
+    environment:
+      LAB_DEVICES: >-
+        core-01=172.31.10.11,dist-01=172.31.10.12,access-a1=172.31.10.20,access-b1=172.31.10.21,
+        access-c1=172.31.10.22,access-d1=172.31.10.23,fw-01=172.31.10.41,fw-02=172.31.10.42
+      LAB_TOKEN: lab-librenms-token
+      LAB_POLL_SECONDS: "30"
+    user: lab
+    networks: {lab: {ipv4_address: 172.31.10.5}}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=5)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    depends_on: [core-01, dist-01, access-a1, access-b1, access-c1, access-d1, fw-01, fw-02]
+
+  # The event network. The core also exports NetFlow (to agent A, as through a VRRP address).
+  core-01:
+    <<: *device
+    environment: {<<: *device-env, DEVICE: core-01, LAB_FLOW_TARGETS: "172.31.10.31:2055"}
+    networks: {lab: {ipv4_address: 172.31.10.11}}
+  dist-01:
+    <<: *device
+    environment: {<<: *device-env, DEVICE: dist-01}
+    networks: {lab: {ipv4_address: 172.31.10.12}}
+  access-a1:
+    <<: *device
+    environment: {<<: *device-env, DEVICE: access-a1}
+    networks: {lab: {ipv4_address: 172.31.10.20}}
+  access-b1:
+    <<: *device
+    environment: {<<: *device-env, DEVICE: access-b1}
+    networks: {lab: {ipv4_address: 172.31.10.21}}
+  access-c1:
+    <<: *device
+    environment: {<<: *device-env, DEVICE: access-c1}
+    networks: {lab: {ipv4_address: 172.31.10.22}}
+  access-d1:
+    <<: *device
+    environment: {<<: *device-env, DEVICE: access-d1}
+    networks: {lab: {ipv4_address: 172.31.10.23}}
+  fw-01:
+    <<: *device
+    environment: {<<: *device-env, DEVICE: fw-01, LAB_PUSH_URL: "${LAB_PUSH_URL:-}"}
+    networks: {lab: {ipv4_address: 172.31.10.41}}
+  fw-02:
+    <<: *device
+    environment: {<<: *device-env, DEVICE: fw-02, LAB_PUSH_URL: "${LAB_PUSH_URL:-}"}
+    networks: {lab: {ipv4_address: 172.31.10.42}}
+  # The LAN cache machine: writes the cache's access log and lancache-dns's query log, which the
+  # agents read (mounted at /lancache) once the LAN cache plugin is on.
+  lancache-01:
+    <<: *device
+    environment: {DEVICE: lancache-01, LAB_LANCACHE_DIR: /lancache, LAB_REPLAY_EVERY: "10"}
+    volumes: ["lancache:/lancache"]
+    networks: {lab: {ipv4_address: 172.31.10.50}}
+
+  agent-a:
+    <<: *agent
+    environment: {<<: *agent-env, LAB_AGENT: agent-a}
+    networks: {lab: {ipv4_address: 172.31.10.31}}
+  agent-b:
+    <<: *agent
+    environment: {<<: *agent-env, LAB_AGENT: agent-b}
+    networks: {lab: {ipv4_address: 172.31.10.32}}
+
+  e2e:
+    image: floorbit-lab:local
+    build: {context: ., dockerfile: Dockerfile}
+    profiles: ["test"]
+    environment:
+      LAB_FLOORBIT_URL: http://172.31.10.2:5000
+      LAB_ADMIN_PASSWORD: lab-admin-password
+      LAB_AGENT_METRICS: agent-a=http://172.31.10.31:9520,agent-b=http://172.31.10.32:9520
+      LAB_CAPTIVE: http://172.31.10.31:8908
+    networks: {lab: {ipv4_address: 172.31.10.60}}
+
+networks:
+  lab:
+    ipam:
+      config: [{subnet: 172.31.10.0/24}]
+
+volumes:
+  keys:
+  lancache:
