@@ -10,7 +10,8 @@ floorbit/agent_link.py in bitsandbricks-ch/floorbit.
 
 Nothing listens here unless asked: the agent makes outgoing HTTPS requests, and only with
 ``FLOORBIT_AGENT_SYSLOG_PORT`` or ``FLOORBIT_AGENT_FLOWS_PORT`` does it take syslog or flows from
-the event network (syslog_relay.py, flows_relay.py).
+the event network (syslog_relay.py, flows_relay.py), and only with ``FLOORBIT_AGENT_CAPTIVE`` does it
+answer the Captive Portal API (captive.py).
 When the hosted Floorbit can't be reached it waits and tries again, a little longer each time (up to ``MAX_BACKOFF``).
 """
 import contextlib
@@ -44,7 +45,7 @@ WORKERS = 3               # calls of one kind run side by side, each kind in its
 REPORT_EVERY = 30         # seconds between reports to the hosted side (its Local agents page)
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
-           'port_clients', 'inventory_feeds', 'cable_feeds', 'health_feeds', 'dns_feeds',
+           'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
            'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe')
 
 
@@ -214,6 +215,8 @@ def local_executor(app):
                 return inventory_feeds(registry)
             if method == 'cable_feeds':
                 return cable_feeds(registry)
+            if method == 'firewall_feeds':
+                return firewall_feeds(registry)
             if method == 'wifi_feeds':
                 return wifi_feeds(registry)
             if method == 'dns_feeds':
@@ -279,6 +282,12 @@ def cable_feeds(registry):
     """Every plugin that's on here and knows cables (NetBox), each with its cables or its error."""
     from floorbit import cables
     return _feeds(registry, cables.sources(registry) if registry is not None else [], 'cables')
+
+
+def firewall_feeds(registry):
+    """Every plugin here that lists firewall ranges (NetBox prefixes), each with its ranges or its error."""
+    from floorbit import firewalls
+    return _feeds(registry, firewalls.import_sources(registry) if registry is not None else [], 'firewall_ranges')
 
 
 def _feeds(registry, specs, method):
@@ -548,6 +557,11 @@ class Agent:
         return self._said(self.http.get(f'{self.url}/api/agent/v1/seats', headers=self._headers(),
                                         timeout=HTTP_TIMEOUT))
 
+    def captive_state(self):
+        """Which client IPs are done, for the Captive Portal API (captive.py). RuntimeError: check-in is off."""
+        return self._said(self.http.get(f'{self.url}/api/agent/v1/captive', headers=self._headers(),
+                                        timeout=HTTP_TIMEOUT))
+
     def send_flows(self, snapshot):
         return self._said(self._post('/api/agent/v1/flows', {'snapshot': snapshot}))
 
@@ -774,6 +788,33 @@ def start_flows(agent, port, out=print):
     return relay
 
 
+def start_captive(agent, env, out=print):
+    """The Captive Portal API, when FLOORBIT_AGENT_CAPTIVE is set; as start_syslog."""
+    from . import captive
+    address = env.get('FLOORBIT_AGENT_CAPTIVE', '').strip()
+    if not address or address.lower() == 'off':
+        return None
+    api = captive.Captive(agent.captive_state, env.get('FLOORBIT_AGENT_CAPTIVE_PORTAL_URL', ''),
+                          [p for p in env.get('FLOORBIT_AGENT_CAPTIVE_PROXIES', '').split(',') if p.strip()], log=out)
+    try:
+        server = captive.serve(api, address, log=out)
+    except (ValueError, OSError, OverflowError) as exc:
+        out(f'[captive] cannot answer on "{address}" (host:port): {exc}')
+        return False
+    return _Served(server, api)
+
+
+class _Served:
+    """A server and its refresh, stopped together."""
+
+    def __init__(self, server, api):
+        self.server, self.api = server, api
+
+    def stop(self):
+        self.api.stop()
+        self.server.shutdown()
+
+
 def start_vrrp(agent, env, out=print):
     """keepalived for the VIPs in FLOORBIT_AGENT_VRRP_VIPS (vrrp.py). None when VRRP is off, False
     when it is set up wrong or can't start (the agent then stops: a VIP nobody holds is worse
@@ -864,7 +905,8 @@ def main(argv=None):
     if argv and argv[0] == 'check':
         return 0 if check(agent, agent.execute) else 1
     relays = [start_syslog(agent, os.environ.get('FLOORBIT_AGENT_SYSLOG_PORT', '')),
-              start_flows(agent, os.environ.get('FLOORBIT_AGENT_FLOWS_PORT', ''))]
+              start_flows(agent, os.environ.get('FLOORBIT_AGENT_FLOWS_PORT', '')),
+              start_captive(agent, os.environ)]
     from . import metrics as agent_metrics
     agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None))
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
