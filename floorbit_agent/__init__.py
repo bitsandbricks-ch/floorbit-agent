@@ -46,7 +46,7 @@ REPORT_EVERY = 30         # seconds between reports to the hosted side (its Loca
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
-           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe')
+           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe', 'plugin', 'plugins_reload')
 
 
 def _within(seconds, open_it, late=None):
@@ -198,8 +198,11 @@ def probe_call(method, args, env=None):
         raise PluginError('The probe was asked for wrongly.') from None
 
 
-def local_executor(app):
-    """Run a call against this machine's monitoring plugin, as the hosted Floorbit would locally."""
+def local_executor(app, plugins_ref=None):
+    """Run a call against this machine's monitoring plugin, as the hosted Floorbit would locally.
+    ``plugins_ref["host"]``: the PluginHost, for the ``plugin`` calls."""
+    plugins_ref = {} if plugins_ref is None else plugins_ref
+
     def execute(method, args):
         from floorbit import sources
         from floorbit.plugins.base import PluginError
@@ -209,6 +212,11 @@ def local_executor(app):
             return game_call(method, args)
         if method in ('dns_probe', 'tcp_probe'):
             return probe_call(method, args)
+        if method in ('plugin', 'plugins_reload'):
+            host = plugins_ref.get('host')
+            if host is None:
+                raise PluginError('This agent runs no plugins yet.')
+            return host.call(args) if method == 'plugin' else host.reload()
         with app.app_context():
             registry = sources.registry
             if method == 'inventory_feeds':
@@ -334,6 +342,7 @@ class Agent:
         self._running = 0
         self._running_lock = threading.Lock()
         self.metrics.collect(self._gauges)
+        self.plugins = None       # plugin_host.PluginHost, once main() starts it
 
     def _gauges(self, m):
         m.set('floorbit_agent_info', 1, {'version': self.version, 'protocol': self.protocol})
@@ -442,6 +451,7 @@ class Agent:
             'syslog_dropped': m.get('floorbit_agent_syslog_dropped_total'),
             'syslog_backlog': m.get('floorbit_agent_syslog_backlog'),
             'flows_packets': m.get('floorbit_agent_flows_packets_total'),
+            **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
         }
 
     def _report_due(self, now=None):
@@ -839,6 +849,19 @@ def start_vrrp(agent, env, out=print):
     return keepalived
 
 
+def start_plugins(agent, app):
+    """The plugin host: which of this image's plugins run comes from the hosted Floorbit. For
+    ``check`` it asks once and starts them, so their checks can run."""
+    from floorbit import sources
+
+    from .plugin_host import PluginHost, agent_specs
+    root = os.environ.get('FLOORBIT_AGENT_STATE') or os.path.dirname(os.path.abspath(
+        os.environ.get('FLOORBIT_DATA_FILE', 'agent-data.json')))
+    host = PluginHost(agent, agent_specs(sources.registry), root)
+    agent.plugins = host
+    return host
+
+
 def _stop_on_term(_signum, _frame):
     raise KeyboardInterrupt
 
@@ -900,10 +923,20 @@ def main(argv=None):
         app = create_app(start_background=False)
     turn_on(app, os.environ.get('FLOORBIT_AGENT_PLUGINS', ''))
     version = agent_version()
-    agent = Agent(url, key, local_executor(app), version=version)
+    plugins_ref = {}
+    agent = Agent(url, key, local_executor(app, plugins_ref), version=version)
     agent.heartbeat = heartbeat_file()
+    host = plugins_ref['host'] = start_plugins(agent, app)
     if argv and argv[0] == 'check':
-        return 0 if check(agent, agent.execute) else 1
+        good = check(agent, agent.execute)
+        try:
+            host.pull()
+        except Exception as exc:  # noqa: BLE001
+            print(f'  ✗ the plugin settings from the hosted Floorbit: {exc}')
+            good = False
+        good = host.check() and good
+        host.stop()
+        return 0 if good else 1
     relays = [start_syslog(agent, os.environ.get('FLOORBIT_AGENT_SYSLOG_PORT', '')),
               start_flows(agent, os.environ.get('FLOORBIT_AGENT_FLOWS_PORT', '')),
               start_captive(agent, os.environ)]
@@ -912,7 +945,10 @@ def main(argv=None):
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
                                          HEALTHY_FOR, os.environ.get('FLOORBIT_AGENT_METRICS_TOKEN') or None)
     keepalived = start_vrrp(agent, os.environ)
+    agent.metrics.collect(host.collect)
+    host.start()
     if False in relays or keepalived is False:
+        host.stop()
         for relay in relays:
             if relay:
                 relay.stop()
@@ -930,6 +966,7 @@ def main(argv=None):
         agent.stop()
         print('[agent] stopping')
     finally:
+        host.stop()
         if keepalived:
             keepalived.stop()
         for relay in relays:
