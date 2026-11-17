@@ -475,6 +475,8 @@ class Agent:
             'syslog_dropped': m.get('floorbit_agent_syslog_dropped_total'),
             'syslog_backlog': m.get('floorbit_agent_syslog_backlog'),
             'flows_packets': m.get('floorbit_agent_flows_packets_total'),
+            'front_door_passed': m.total('floorbit_agent_front_door_requests_total', outcome='passed'),
+            'front_door_failed': m.total('floorbit_agent_front_door_requests_total', outcome='failed'),
             **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
             **({'updates': self.plugins.updater.report()}
                if getattr(self.plugins, 'updater', None) is not None else {}),
@@ -845,6 +847,38 @@ def start_captive(agent, env, out=print):
     return _Served(server, api)
 
 
+def start_front_door(agent, env, out=print):
+    """The attendee front door (front_door.py), when FLOORBIT_AGENT_FRONT_DOOR is set; as start_syslog."""
+    from . import front_door
+    address = env.get('FLOORBIT_AGENT_FRONT_DOOR', '').strip()
+    if not address or address.lower() == 'off':
+        return None
+    door = front_door.FrontDoor(agent.url, agent.key, proxies=[
+        p for p in env.get('FLOORBIT_AGENT_FRONT_DOOR_PROXIES', '').split(',') if p.strip()], log=out)
+    try:
+        context = front_door.tls_context(env)
+        server = front_door.serve(door, address, context)
+    except (ValueError, OSError, OverflowError) as exc:
+        out(f'[front door] cannot answer on "{address}" (host:port, and the TLS certificate if set): {exc}')
+        return False
+
+    def numbers(m):
+        for outcome, n in dict(door.counts).items():
+            m.set('floorbit_agent_front_door_requests_total', n, {'outcome': outcome})
+        m.set('floorbit_agent_front_door_open', door.open)
+    agent.metrics.collect(numbers)
+    out(f'[front door] serving the hosted Floorbit\'s pages on {"https" if context else "http"}://{address}')
+    return _Server(server)
+
+
+class _Server:
+    def __init__(self, server):
+        self.server = server
+
+    def stop(self):
+        self.server.shutdown()
+
+
 class _Served:
     """A server and its refresh, stopped together."""
 
@@ -989,7 +1023,7 @@ def main(argv=None):
         return 0 if good else 1
     relays = [start_syslog(agent, os.environ.get('FLOORBIT_AGENT_SYSLOG_PORT', '')),
               start_flows(agent, os.environ.get('FLOORBIT_AGENT_FLOWS_PORT', '')),
-              start_captive(agent, os.environ)]
+              start_captive(agent, os.environ), start_front_door(agent, os.environ)]
     from . import metrics as agent_metrics
     agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None))
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
