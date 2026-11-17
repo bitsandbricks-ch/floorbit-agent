@@ -81,3 +81,68 @@ def test_the_agent_asks_the_hosted_side_and_starts_only_when_set():
     assert agent_mod.start_captive(a, {"FLOORBIT_AGENT_CAPTIVE": "nope"}, out=quiet) is False
     served = agent_mod.start_captive(a, {"FLOORBIT_AGENT_CAPTIVE": "127.0.0.1:0"}, out=quiet)
     served.stop()
+
+
+CODE = "abcdefghijklmnop1234"
+
+
+def test_the_seat_walk_hello_sends_the_laptop_back_only_to_its_floorbit():
+    said = []
+    api = captive.Captive(lambda: {"done": []}, log=quiet, say_hello=lambda code, ip: said.append((code, ip)),
+                          floorbit_url="https://floor.example.com/")
+    back = "https://floor.example.com/seat-walk?hello=" + CODE
+    assert api.hello(CODE, "192.0.2.50", back) == (303, back, "")
+    assert said == [(CODE, "192.0.2.50")]
+    # Another host, or no back at all: a short page, never a redirect somewhere else.
+    for other in ("https://evil.example.net/seat-walk", "http://floor.example.com/seat-walk", ""):
+        status, location, text = api.hello(CODE, "192.0.2.50", other)
+        assert (status, location) == (200, None) and "192.0.2.50" in text
+
+    def refused(code, ip):
+        raise RuntimeError("That walk-through code is unknown, used or too old.")
+    api.say_hello = refused
+    status, location, text = api.hello(CODE, "192.0.2.50", back)
+    assert status == 502 and location is None and "too old" in text
+    assert captive.Captive(lambda: {}, log=quiet).hello(CODE, "192.0.2.50", back)[0] == 404
+
+
+def test_the_hello_over_http_redirects_and_escapes_its_page():
+    said = []
+    api = captive.Captive(lambda: {"done": []}, log=quiet, proxies=["127.0.0.1"],
+                          say_hello=lambda code, ip: said.append((code, ip)), floorbit_url="https://floor.example.com")
+    server = captive.serve(api, "127.0.0.1:0", log=quiet)
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args):
+            return None
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        port = server.server_address[1]
+        base = f"http://127.0.0.1:{port}/floorbit/hello/{CODE}"
+        req = urllib.request.Request(base + "?back=https%3A%2F%2Ffloor.example.com%2Fseat-walk",
+                                     headers={"X-Forwarded-For": "192.0.2.50"})
+        with pytest.raises(urllib.error.HTTPError) as moved:
+            opener.open(req, timeout=5)
+        assert moved.value.code == 303 and moved.value.headers["Location"] == "https://floor.example.com/seat-walk"
+        assert said == [(CODE, "192.0.2.50")]     # the laptop's own IP, through the trusted proxy
+        with urllib.request.urlopen(base + "?back=<script>", timeout=5) as resp:
+            assert "text/html" in resp.headers["Content-Type"] and b"<script>" not in resp.read()
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/floorbit/hello/short", timeout=5)
+    finally:
+        api.stop()
+        server.shutdown()
+
+
+def test_the_agent_reports_the_hello_and_where_laptops_reach_it(monkeypatch):
+    host = FakeHost()
+    a = make(host)
+    a.seat_walk_hello(CODE, "192.0.2.50")
+    assert host.posts[-1][0].endswith("/api/agent/v1/seat-walk")
+    assert host.posts[-1][2] == {"token": CODE, "ip": "192.0.2.50"}
+    with pytest.raises(RuntimeError, match="too old"):
+        make(type("H", (FakeHost,), {"post": lambda self, *a, **k: Resp(404, {"error": "too old"})})()
+             ).seat_walk_hello(CODE, "192.0.2.50")
+    monkeypatch.setenv("FLOORBIT_AGENT_LAN_URL", "http://agent.lan.example.com:8908/")
+    assert make(FakeHost()).lan_url == "http://agent.lan.example.com:8908"
+    assert make(FakeHost()).report()["lan_url"] == "http://agent.lan.example.com:8908"
