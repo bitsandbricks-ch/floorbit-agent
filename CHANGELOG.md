@@ -38,6 +38,10 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- A plugin whose start or stop never returns no longer holds up the agent: it is given up on after 30 (start) or 15 (stop) seconds and shown as failed.
+- A plugin's sender that hits an error (a disk hiccup) keeps going instead of stopping for good while the spool fills up.
+- A plugin's HTTP listener refuses a bad `Content-Length` and bodies over 32 MB (400, 413) instead of reading as much as the client sends, and drops a client that stalls for 30 seconds.
+- At most four calls or actions from the hosted Floorbit run at once per plugin; more get "still busy" at once.
 - A burst of syslog no longer loses most of its lines: one thread reads the port instead of a thread per datagram, which kept only about a fifth of a 25,000-line-a-second burst. Syslog and NetFlow ask for an 8 MB receive buffer.
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
 - `/healthz` no longer reads as unhealthy when the clock steps back.
