@@ -27,6 +27,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PULL_EVERY = 60
+# The hosted side's word in a split brain (docs/vrrp.md) counts this long after it was last heard;
+# with the uplink gone longer, VRRP alone decides again.
+HA_HINT_FRESH = 3 * PULL_EVERY
 PULL_UNSUPPORTED = 600     # a hosted Floorbit without agent plugins: ask again this rarely
 SEND_RETRY = 10
 SPOOL_MAX_BYTES = 256 * 1024 ** 2
@@ -325,6 +328,9 @@ class PluginHost:
         self.wanted = {}          # plugin id -> its config, as the hosted side last said
         self.updater = None       # bundles.Updater: signed plugin updates from the hosted side
         self.vrrp = None          # vrrp.Keepalived while VRRP runs here
+        self.stand_by_for = None  # the agent the hosted side says polls while VRRP is split
+        self._ha_heard = None     # when the hosted side last said so (monotonic)
+        self._yielding = False    # for the log: standing by now
 
     # config -------------------------------------------------------------------------------
     def pull(self):
@@ -341,8 +347,13 @@ class PluginHost:
             return False
         self.supported = True
         if resp.status_code == 304:
+            self._ha_heard = time.monotonic()     # the etag covers the hint: still as it was
             return True
         body = self.agent._check(resp)
+        ha = body.get('ha') if isinstance(body.get('ha'), dict) else {}
+        other = ha.get('stand_by_for')
+        self.stand_by_for = other if isinstance(other, str) and other else None
+        self._ha_heard = time.monotonic()
         if self.updater is not None:
             # Before apply, so a plugin turned on together with its update starts on the new version.
             self.updater.offer(self, body.get('bundles') or {})
@@ -440,12 +451,31 @@ class PluginHost:
         self._reload.set()
         return {'ok': True}
 
-    def primary(self):
+    def primary(self, now=None):
         vrrp = self.vrrp
         if not vrrp:
             return True
         from .vrrp import instance
-        return vrrp.states.get(instance(1)) == 'MASTER'
+        if vrrp.states.get(instance(1)) != 'MASTER':
+            self._note_yield(False)
+            return False
+        # Split brain: the agents can't hear each other's VRRP and both hold the first VIP. The hosted
+        # side hears both and names one; the other stands by, so no login is tried twice.
+        now = time.monotonic() if now is None else now
+        told = (self.stand_by_for is not None and self._ha_heard is not None
+                and now - self._ha_heard < HA_HINT_FRESH)
+        self._note_yield(told)
+        return not told
+
+    def _note_yield(self, yielding):
+        if yielding == self._yielding:
+            return
+        self._yielding = yielding
+        if yielding:
+            self.log(f'[vrrp] split brain: another agent holds the first VIP too; the hosted Floorbit says '
+                     f'{self.stand_by_for} polls and logs in, so this one stands by')
+        else:
+            self.log('[vrrp] no longer standing by for another agent')
 
     def report_soon(self):
         """A new failed login: the hosted side should hear of it now, not in half a minute."""

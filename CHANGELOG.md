@@ -8,6 +8,8 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Split brain between VRRP agents: when they can't hear each other and both hold the first VIP, the hosted Floorbit names one (the smallest agent id) and the other stands by, so no device is polled and no login tried by both. The hint comes with the plugin config and counts for three minutes; without it VRRP alone decides. See `docs/vrrp.md`.
+
 - The crew's seat walk-through works with a hosted Floorbit or one behind NAT: the captive port answers `/floorbit/hello/<code>`, reports the crew laptop's own IP with the page's one-time code and sends the browser back to Floorbit. `FLOORBIT_AGENT_LAN_URL` tells Floorbit where laptops in the hall reach it. The test lab walks a seat block this way.
 - A test lab (`lab/`, `docs/lab/`): a hosted Floorbit, two agents, a lab LibreNMS and a simulated event network (a Nexus core, a Catalyst 4500, four 2960-X, two OPNsense firewalls, a LAN cache) with syslog, traps and NetFlow on a loop, and end-to-end tests from seat lookup and check-in to agent failover. CI runs it on every pull request. `docs/lab/capture.md` lists what to record from real gear, and `lab/tools/anonymise.py` strips it before it is shared.
 - Device telemetry without LibreNMS: with Floorbit's Telemetry plugin turned on, the agent is the collector. A Telegraf sidecar (`docker compose --profile telemetry up -d`) polls SNMP, takes traps, gNMI and Cisco model-driven telemetry, and sends to the agent on port 8186; the agent also asks NX-API, RESTCONF and the OPNsense API. The hosted Floorbit gets the per-port and per-device numbers, and which MAC with which IP is on which port for its IP and MAC history. How the collector is doing shows on the Local agents page.
