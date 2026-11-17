@@ -76,6 +76,14 @@ UDP and sends them on, the flows only as a summary.
   the check-in page. The list of checked-in IPs never leaves the agent. `X-Forwarded-For` is
   believed only from the addresses in `FLOORBIT_AGENT_CAPTIVE_PROXIES`, so a client can't ask about
   another IP. A wrong answer can only show or hide the note: nothing is blocked either way.
+- **Use the front door** (only with `FLOORBIT_AGENT_FRONT_DOOR`): it reaches the hosted Floorbit
+  and nothing else, and never passes on the agent's own API (`/api/agent/`). It adds the agent key
+  and the client's address to each request; whatever a client sends under those names, and
+  `X-Forwarded-For`, is dropped, so an attendee can't name another seat's address. A client behind
+  a proxy is named only by the proxies in `FLOORBIT_AGENT_FRONT_DOOR_PROXIES`. The key is in the
+  request to the hosted side only (over HTTPS), never in an answer. At most 200 requests are passed
+  on at once (more get 503), bodies over 32 MB are refused, and the speed test answered here shares
+  Floorbit's per-client byte budget and its cap of streams at once.
 - **Flood the UDP ports:** the syslog backlog has a fixed size, the newest lines are dropped and
   counted (`floorbit_agent_syslog_dropped_total`), and memory stays bounded.
 - **Read the report:** the half-minute report to the hosted Floorbit carries the same kind of counts
