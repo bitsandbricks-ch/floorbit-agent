@@ -49,8 +49,13 @@ METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats'
            'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe', 'plugin', 'plugins_reload',
            'switch_call', 'shell_open', 'shell_io', 'shell_close', 'plugin_test')
 # Pools bigger than WORKERS: a switch command runs on many switches at once, and each open terminal
-# keeps one shell_io read waiting on the switch.
-POOL_SIZES = {'switch_call': 8, 'shell_open': 4, 'shell_io': 24}
+# keeps one shell_io read waiting on the switch. Seat lookups come in bursts when doors open (a
+# whole hall checks in): with 3 at a time a 400-switch event managed 14 a second, and calls queued
+# past the hosted side's timeout. LibreNMS takes 16 side by side easily (3 requests each).
+LOOKUP_WORKERS = 16
+POOL_SIZES = {'switch_call': 8, 'shell_open': 4, 'shell_io': 24,
+              'resolve_ip': LOOKUP_WORKERS, 'arp': LOOKUP_WORKERS, 'port_stats': LOOKUP_WORKERS,
+              'device_details': 8}
 
 
 def _within(seconds, open_it, late=None):
