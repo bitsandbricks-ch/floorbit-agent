@@ -106,12 +106,12 @@ def hall(tmp_path):
     clock = [1000.0]
     env = {}
 
-    def make(policy="auto", with_keys=True):
+    def make(policy="auto", with_keys=True, image=True):
         # Each one as a fresh agent process: the image's plugins, nothing loaded yet.
-        registry.specs = {"hallthing": image_spec}
+        registry.specs = {"hallthing": image_spec} if image else {}
         sys.modules.pop("floorbit_agent_plugin_hallthing", None)
         env["FLOORBIT_AGENT_PLUGIN_UPDATES"] = policy
-        host = PluginHost(agent, {"hallthing": image_spec}, str(tmp_path / "state"), env={}, log=lines.append)
+        host = PluginHost(agent, dict(registry.specs), str(tmp_path / "state"), env={}, log=lines.append)
         host.updater = Updater(agent, registry, str(tmp_path / "state"), "0.4.0", env=env,
                                keys=keys if with_keys else {}, log=lines.append, clock=lambda: clock[0])
         host.updater.restore()
@@ -149,6 +149,20 @@ def test_a_signed_newer_bundle_is_installed_and_kept(hall):
     clock[0] += 301
     host.updater.watch(host)
     assert [e["event"] for e in host.updater.report()["events"]] == ["installed", "kept"]
+
+
+def test_a_plugin_the_image_lacks_comes_from_the_marketplace(hall):
+    # Installed on the hosted side from the Marketplace: versions of its own, lower than the image's.
+    started, hosted, pem, _clock, tmp_path, _ = hall
+    host = started(image=False)
+    hosted.publish(tmp_path, pem, "0.1.0")
+    host.pull()
+    assert runs(host) == "0.1.0"
+    assert host.updater.report()["plugins"]["hallthing"]["version"] == "0.1.0"
+    host.stop()
+    again = started(image=False)                                  # restarted: checked again and kept
+    again.pull()
+    assert runs(again) == "0.1.0"
 
 
 def test_older_or_same_versions_are_never_installed(hall):
