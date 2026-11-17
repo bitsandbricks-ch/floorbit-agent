@@ -452,6 +452,10 @@ class Agent:
             'syslog_backlog': m.get('floorbit_agent_syslog_backlog'),
             'flows_packets': m.get('floorbit_agent_flows_packets_total'),
             **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
+            **({'updates': self.plugins.updater.report()}
+               if getattr(self.plugins, 'updater', None) is not None else {}),
+            **({'vrrp': {'primary': self.plugins.primary(), 'holds': self.plugins.vrrp.holds()}}
+               if getattr(self.plugins, 'vrrp', None) else {}),
         }
 
     def _report_due(self, now=None):
@@ -855,12 +859,25 @@ def start_plugins(agent, app):
     from floorbit import sources
 
     from .plugin_host import LocalPlugins, PluginHost, agent_specs
-    root = os.environ.get('FLOORBIT_AGENT_STATE') or os.path.dirname(os.path.abspath(
-        os.environ.get('FLOORBIT_DATA_FILE', 'agent-data.json')))
+    root = state_root()
     local = LocalPlugins(app, sources.registry, root, pinned=os.environ.get('FLOORBIT_AGENT_PLUGINS', '').split(','))
     host = PluginHost(agent, agent_specs(sources.registry), root, local=local)
+    from .bundles import Updater
+    host.updater = Updater(agent, sources.registry, root, floorbit_version(app), log=print)
+    host.updater.restore()
+    host.specs = agent_specs(sources.registry)      # with the bundles installed before
     agent.plugins = host
     return host
+
+
+def state_root():
+    return os.environ.get('FLOORBIT_AGENT_STATE') or os.path.dirname(os.path.abspath(
+        os.environ.get('FLOORBIT_DATA_FILE', 'agent-data.json')))
+
+
+def floorbit_version(app):
+    """The Floorbit this image is built on: the version of the plugins it came with."""
+    return str(app.config.get('FLOORBIT_VERSION') or '0')
 
 
 def _stop_on_term(_signum, _frame):
@@ -900,11 +917,16 @@ def health(path=None, now=None, out=print):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] not in ('check', 'run', 'health'):
-        print('Usage: python -m floorbit_agent [run | check | health]', file=sys.stderr)
+    if argv and argv[0] not in ('check', 'run', 'health', 'plugins'):
+        print('Usage: python -m floorbit_agent [run | check | health | plugins [approve <id> | all]]',
+              file=sys.stderr)
         return 2
     if argv and argv[0] == 'health':
         return health()
+    if argv and argv[0] == 'plugins':
+        os.environ.setdefault('FLOORBIT_DATA_FILE', os.path.abspath('agent-data.json'))
+        from .bundles import cli
+        return cli(argv[1:], state_root())
     url = os.environ.get('FLOORBIT_URL', '').strip()
     key = os.environ.get('FLOORBIT_AGENT_KEY', '').strip()
     if not url or not key:
@@ -946,6 +968,7 @@ def main(argv=None):
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
                                          HEALTHY_FOR, os.environ.get('FLOORBIT_AGENT_METRICS_TOKEN') or None)
     keepalived = start_vrrp(agent, os.environ)
+    host.vrrp = keepalived or None
     agent.metrics.collect(host.collect)
     host.start()
     if False in relays or keepalived is False:

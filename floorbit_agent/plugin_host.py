@@ -59,6 +59,11 @@ class AgentContext:
         self._wake = threading.Event()
         self._send_lock = threading.Lock()     # one sender at a time: a record goes out once
 
+    def primary(self):
+        """True unless VRRP runs here and another agent holds the first VIP: only the primary
+        polls devices and logs in, so two agents in one hall never do it twice (docs/vrrp.md)."""
+        return self.host.primary()
+
     # logging and health ---------------------------------------------------------------
     def log(self, message):
         self.host.log(f'[{self.id}] {message}')
@@ -316,6 +321,9 @@ class PluginHost:
         self._reload = threading.Event()
         self._stop = threading.Event()
         self._thread = None
+        self.wanted = {}          # plugin id -> its config, as the hosted side last said
+        self.updater = None       # bundles.Updater: signed plugin updates from the hosted side
+        self.vrrp = None          # vrrp.Keepalived while VRRP runs here
 
     # config -------------------------------------------------------------------------------
     def pull(self):
@@ -334,6 +342,9 @@ class PluginHost:
         if resp.status_code == 304:
             return True
         body = self.agent._check(resp)
+        if self.updater is not None:
+            # Before apply, so a plugin turned on together with its update starts on the new version.
+            self.updater.offer(self, body.get('bundles') or {})
         self.apply(body.get('plugins') or {})
         if self.local is not None and isinstance(body.get('local'), dict):   # an older Floorbit sends none
             self.local.apply(body['local'])
@@ -343,6 +354,7 @@ class PluginHost:
     def apply(self, wanted):
         """Start, reconfigure and stop plugins so that what runs is ``wanted``."""
         with self._lock:
+            self.wanted = {k: v for k, v in wanted.items() if isinstance(v, dict)}
             for pid in [p for p in self.running if p not in wanted]:
                 self._stop_one(pid, 'turned off on the hosted Floorbit')
             for pid in [p for p in self.failed if p not in wanted]:
@@ -427,6 +439,13 @@ class PluginHost:
         self._reload.set()
         return {'ok': True}
 
+    def primary(self):
+        vrrp = self.vrrp
+        if not vrrp:
+            return True
+        from .vrrp import instance
+        return vrrp.states.get(instance(1)) == 'MASTER'
+
     def report_soon(self):
         """A new failed login: the hosted side should hear of it now, not in half a minute."""
         self.agent._report_at = None
@@ -436,6 +455,8 @@ class PluginHost:
             wait = PULL_EVERY
             try:
                 self.pull()
+                if self.updater is not None:
+                    self.updater.watch(self)
                 if self.supported is False:
                     wait = PULL_UNSUPPORTED
             except Exception as exc:  # noqa: BLE001  # the main loop says when the hosted side is away
@@ -474,7 +495,11 @@ class PluginHost:
                 why = (resp.json() or {}).get('error')
             except ValueError:
                 why = None
-            raise PluginError(why or f'the hosted Floorbit answered HTTP {resp.status_code}')
+            why = why or f'the hosted Floorbit answered HTTP {resp.status_code}'
+            if resp.status_code in (404, 409, 422):      # it answered, and said no
+                from floorbit.plugins.agent import HostedSaidNo
+                raise HostedSaidNo(why)
+            raise PluginError(why)
         return (resp.json() or {}).get('data')
 
     # calls from the hosted side ---------------------------------------------------------------
