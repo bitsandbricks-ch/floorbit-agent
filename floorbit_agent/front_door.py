@@ -209,7 +209,8 @@ def handler_for(door):
             try:
                 self.send_response(resp.status_code)
                 for k, v in resp.raw.headers.items() if hasattr(resp.raw, 'headers') else resp.headers.items():
-                    if k.lower() in HOP or k.lower() == 'content-encoding':
+                    # Server and Date: http.server sends its own.
+                    if k.lower() in HOP or k.lower() in ('content-encoding', 'server', 'date'):
                         continue
                     self.send_header(k, door.location(v) if k.lower() == 'location' else v)
                 if self.command == 'HEAD':
