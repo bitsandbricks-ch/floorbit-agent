@@ -270,9 +270,11 @@ def _actions_allowed(env):
 
 
 class PluginHost:
-    def __init__(self, agent, specs, state_root, env=None, log=print):
-        """``specs``: {plugin id: floorbit Spec} of the plugins in this image that have an agent part."""
+    def __init__(self, agent, specs, state_root, env=None, log=print, local=None):
+        """``specs``: {plugin id: floorbit Spec} of the plugins in this image that have an agent part.
+        ``local``: a LocalPlugins for the plugins without one (LibreNMS, NetBox, ...)."""
         self.agent = agent
+        self.local = local
         self.specs = specs
         self.state_root = state_root
         self.env = os.environ if env is None else env
@@ -304,6 +306,8 @@ class PluginHost:
             return True
         body = self.agent._check(resp)
         self.apply(body.get('plugins') or {})
+        if self.local is not None and isinstance(body.get('local'), dict):   # an older Floorbit sends none
+            self.local.apply(body['local'])
         self.etag = body.get('etag')
         return True
 
@@ -505,3 +509,63 @@ def agent_specs(registry):
     if registry is None:
         return {}
     return {s.id: s for s in registry.specs.values() if getattr(s, 'agent', None) and not s.error}
+
+
+class LocalPlugins:
+    """The plugins without an agent part that the agent runs in its own copy of Floorbit to answer
+    the hosted side's calls (LibreNMS, NetBox, Pi-hole, ...). The hosted Floorbit says which are on
+    and with which settings; the settings stay in memory (they hold tokens) and the agent's own
+    environment still wins over them. Plugins named in FLOORBIT_AGENT_PLUGINS stay on regardless."""
+
+    def __init__(self, app, registry, state_root, pinned=(), log=print):
+        self.app, self.registry, self.log = app, registry, log
+        self.pinned = {p.strip() for p in pinned if p and p.strip()}
+        self.path = os.path.join(state_root, 'local-plugins.json')
+        try:
+            with open(self.path, encoding='utf-8') as f:
+                self.on = set(json.load(f))      # turned on because the hosted side said so
+        except (OSError, ValueError, TypeError):
+            self.on = set()
+        self.missing = set()
+
+    def apply(self, local):
+        from floorbit import runtime
+        from floorbit.plugins.base import PluginError
+        store = self.registry.settings_store
+        values = {}
+        for config in local.values():
+            if isinstance(config, dict):
+                values.update(config.get('settings') or {})
+        store.set_remote(values)
+        runtime.apply(store)
+        with self.app.app_context():
+            for pid in sorted(local):
+                spec = self.registry.specs.get(pid)
+                if spec is None:
+                    if pid not in self.missing:
+                        self.log(f'[agent] the hosted Floorbit turned on {pid}, which this agent does not have: '
+                                 'update the agent')
+                    self.missing.add(pid)
+                    continue
+                if self.registry.enabled(spec):
+                    continue
+                try:
+                    self.registry.set_enabled(pid, True)
+                except PluginError as exc:
+                    self.log(f'[agent] cannot turn on {pid}: {exc}')
+                    continue
+                self.on.add(pid)
+                self.log(f'[agent] turned on {pid} (on in the hosted Floorbit)')
+            for pid in sorted(self.on - set(local)):
+                self.on.discard(pid)
+                if pid in self.pinned or pid not in self.registry.specs:
+                    continue
+                self.registry.set_enabled(pid, False)
+                self.log(f'[agent] turned off {pid} (off in the hosted Floorbit)')
+        self.missing &= set(local)
+        try:
+            with open(self.path + '.tmp', 'w', encoding='utf-8') as f:
+                json.dump(sorted(self.on), f)
+            os.replace(self.path + '.tmp', self.path)
+        except OSError as exc:
+            self.log(f'[agent] cannot keep which plugins the hosted Floorbit turned on: {exc}')

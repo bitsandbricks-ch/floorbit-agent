@@ -294,3 +294,43 @@ def test_a_listener_can_serve_tls_when_the_hall_gave_a_certificate(setup, tmp_pa
     from floorbit.plugins.base import PluginError
     with pytest.raises(PluginError, match="cannot use the TLS certificate"):
         ctx.listen_http(0, lambda *a: (204, b""), host="127.0.0.1", tls=True)
+
+
+class FakeRegistry:
+    def __init__(self, store, on=()):
+        self.settings_store = store
+        self.specs = {pid: object() for pid in ("librenms", "netbox", "pihole")}
+        self.on = set(on)
+
+    def enabled(self, spec):
+        return any(self.specs[p] is spec for p in self.on)
+
+    def set_enabled(self, pid, on):
+        (self.on.add if on else self.on.discard)(pid)
+
+
+def test_plugins_without_an_agent_part_follow_the_hosted_side(tmp_path):
+    import flask
+    from floorbit.runtime import rt
+    from floorbit.settings import SettingsStore
+
+    from floorbit_agent.plugin_host import LocalPlugins
+    store = SettingsStore(str(tmp_path / "data.json"), environ={"LIBRENMS_TOKEN": "hall-token"})
+    registry = FakeRegistry(store, on={"netbox"})
+    lines = []
+    local = LocalPlugins(flask.Flask("t"), registry, str(tmp_path), pinned=["pihole"], log=lines.append)
+    local.apply({"librenms": {"settings": {"librenms.url": "https://librenms.example.com", "librenms.token": "hosted"}},
+                 "pihole": {"settings": {}}, "unifi": {"settings": {}}})
+    assert registry.on == {"netbox", "librenms", "pihole"}
+    # Settings from the hosted side, kept in memory; the agent's own env still wins.
+    assert rt.librenms_url == "https://librenms.example.com" and rt.librenms_token == "hall-token"
+    assert not (tmp_path / "data.json").exists()
+    assert any("unifi, which this agent does not have" in line for line in lines)
+    # Turned off there: off here, except what the hall pinned and what was on before.
+    local.apply({})
+    assert registry.on == {"netbox", "pihole"} and rt.librenms_url == ""
+    # Remembered across a restart.
+    local.apply({"librenms": {"settings": {}}})
+    again = LocalPlugins(flask.Flask("t"), registry, str(tmp_path), log=lines.append)
+    again.apply({})
+    assert "librenms" not in registry.on
