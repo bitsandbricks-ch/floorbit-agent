@@ -76,6 +76,10 @@ class FakeHosted:
             if (headers or {}).get("If-None-Match") == f'"{self.etag}"':
                 return Resp(304)
             return Resp(200, {"plugins": self.plugins, "etag": self.etag})
+        if url.endswith("/api/agent/v1/plugins/hallthing/seats"):
+            return Resp(200, {"data": {"seat_of": {"192.0.2.10": "A1"}}})
+        if "/api/agent/v1/plugins/" in url:
+            return Resp(409, {"error": "Traffic is turned off on this Floorbit."})
         return Resp(200, {"calls": []})
 
     def post(self, url, data=None, headers=None, timeout=None):
@@ -334,3 +338,25 @@ def test_plugins_without_an_agent_part_follow_the_hosted_side(tmp_path):
     again = LocalPlugins(flask.Flask("t"), registry, str(tmp_path), log=lines.append)
     again.apply({})
     assert "librenms" not in registry.on
+
+
+def test_a_latest_kind_keeps_only_the_newest_and_fetches_ask_the_hosted_part(setup):
+    host, hosted, _agent, _lines = setup
+    sends = {**CONFIG["sends"], "summary": {"privacy": "device", "latest": True}}
+    hosted.plugins = {"hallthing": {**CONFIG, "sends": sends, "fetches": ["seats", "other"]}}
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    hosted.post_status = None                       # away: only the newest summary waits
+    for i in range(5):
+        ctx.send("summary", {"n": i})
+    ctx._send_some()
+    assert ctx.backlog() == 1 and hosted.posts == []
+    hosted.post_status = 200
+    ctx._send_some()
+    assert [b for u, b in hosted.posts if u.endswith("/summary")] == [{"payload": {"n": 4}}] and ctx.backlog() == 0
+    assert ctx.fetch("seats") == {"seat_of": {"192.0.2.10": "A1"}}
+    from floorbit.plugins.base import PluginError
+    with pytest.raises(PluginError, match="Traffic is turned off"):
+        ctx.fetch("other")
+    with pytest.raises(PluginError, match="does not list"):
+        ctx.fetch("secrets")
