@@ -66,7 +66,15 @@ class FlowsRelay:
                 if self._stop.is_set():
                     return
                 raise
-            self.tick()
+
+    def _ticking(self):
+        # Apart from the reading: writing raw flows and sending the summary held the socket
+        # unread, and at 10,000 flows a second the kernel dropped a quarter of the packets.
+        while not self._stop.wait(1):
+            try:
+                self.tick()
+            except Exception as exc:  # noqa: BLE001  # the next tick tries again
+                self.log(f'[agent] flows housekeeping failed: {exc}')
 
     def start(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -82,6 +90,7 @@ class FlowsRelay:
         sock.settimeout(READ_TIMEOUT)
         self._sock = sock
         threading.Thread(target=self._serve, name='agent-flows', daemon=True).start()
+        threading.Thread(target=self._ticking, name='agent-flows-tick', daemon=True).start()
         self.log(f'[agent] listening for NetFlow and IPFIX on UDP {sock.getsockname()[1]}')
         return sock.getsockname()[1]
 
