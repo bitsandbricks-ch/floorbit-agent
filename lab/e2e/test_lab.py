@@ -198,7 +198,8 @@ def test_agent_metrics_count_what_came_in(lab):
     for item in [s for s in spec.split(',') if s]:
         name, _, url = item.partition('=')
         text = requests.get(f'{url}/metrics', timeout=10).text
-        received = [line for line in text.splitlines() if line.startswith('floorbit_agent_syslog_received_total')]
+        received = [line for line in text.splitlines()
+                    if line.startswith('floorbit_agent_plugin_received{') and 'plugin="syslog-relay"' in line]
         assert received and float(received[0].split()[-1]) > 0, f'{name} received no syslog'
 
 

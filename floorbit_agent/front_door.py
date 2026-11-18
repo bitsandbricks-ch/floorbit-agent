@@ -3,13 +3,13 @@ docs/agent.md, "Attendees through the agent").
 
 A hosted Floorbit only sees the hall's public NAT address, so it can't tell which seat's PC is
 asking: check-in can't find the switch port, the speed test measures the internet line, and every
-attendee shares one sign-in lockout. With ``FLOORBIT_AGENT_FRONT_DOOR`` set (``host:port``), the
+attendee shares one sign-in lockout. With the plugin "Front door for attendees" turned on in Floorbit, the
 agent answers on the event network and passes each request on to the hosted Floorbit over HTTPS,
 with two headers it alone can set:
 
 - ``Floorbit-Front-Door``: the agent's key, so the hosted side knows the request came through it;
 - ``Floorbit-Client-IP``: the address the request came from here (the last ``X-Forwarded-For`` hop
-  when it came through one of ``FLOORBIT_AGENT_FRONT_DOOR_PROXIES``).
+  when it came through one of the plugin's trusted proxies).
 
 Whatever a client sends under those names is dropped. The agent's own API (``/api/agent/``) is not
 passed on, and nothing else is reachable through it but the hosted Floorbit.

@@ -13,8 +13,10 @@ A hosted [Floorbit](https://github.com/bitsandbricks-ch/floorbit) can't reach th
 LibreNMS, NetBox and the switches sit behind the event's firewall. The agent runs inside, next to
 them, and connects out to the hosted Floorbit. It takes the hosted side's calls (switch status,
 ports, ARP, the inventory, health checks, DNS and Wi-Fi counts) and answers them with the local
-plugins. If you set it up to, it also forwards syslog and a NetFlow summary. Nothing on the event
-network has to be reachable from outside.
+plugins. If you set it up to, it also forwards syslog and a NetFlow summary. Which plugins it runs,
+and with which settings, comes from the hosted Floorbit (**Settings > Plugins**): the agent's own
+environment holds only its address and key. Nothing on the event network has to be reachable from
+outside.
 
 Everything goes over TLS, checked against the usual certificate authorities. Calls come over a
 WebSocket link (`wss://`) that stays open, so the agent gets them the moment the hosted side asks.
@@ -30,7 +32,7 @@ machine on the event network:
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/bitsandbricks-ch/floorbit-agent/main/compose.yml
 curl -fsSLo agent.env https://raw.githubusercontent.com/bitsandbricks-ch/floorbit-agent/main/agent.env.example
-# fill in FLOORBIT_URL, FLOORBIT_AGENT_KEY and LibreNMS (and NetBox) in agent.env
+# fill in FLOORBIT_URL and FLOORBIT_AGENT_KEY in agent.env; the rest is set up in Floorbit
 docker compose run --rm agent python -m floorbit_agent check
 docker compose up -d
 ```
@@ -46,15 +48,23 @@ python -m floorbit_agent health    # 0 when the hosted Floorbit answered in the 
 Every setting, what works through the agent and the protocol are in Floorbit's
 [docs/agent.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md).
 
+## Settings from an older agent
+
+An agent before this one read LibreNMS, NetBox, `FLOORBIT_PLUGIN_*`, `FLOORBIT_AGENT_PLUGINS` and
+its relays (`FLOORBIT_AGENT_SYSLOG_PORT`, `_FLOWS_PORT`, `_CAPTIVE`, `_FRONT_DOOR`, ...) from its
+own environment. It no longer does. The first time it gets through after the update, it sends what
+those set to the hosted Floorbit once, which takes it over for each plugin nobody has set up there
+yet and says so in its audit log. The agent logs what was taken over and which variables to remove.
+Update the hosted Floorbit first: an older one doesn't know this handover.
+
 ## When the uplink is down
 
-Syslog the agent can't send goes to a disk buffer in its state volume (`/app/state/buffer`), so
-nothing is lost while the hosted Floorbit is away or the agent restarts. Once it is back, the agent
-sends the newest lines first and catches up on the buffer behind them, oldest first, at up to
-5,000 lines a second. The buffer keeps at most 2 GB and 24 hours (`FLOORBIT_AGENT_BUFFER_MAX_MB`,
-`FLOORBIT_AGENT_BUFFER_MAX_HOURS`; `0` MB turns it off); past that the oldest lines go first, counted
-in `floorbit_agent_syslog_dropped_total`. Every line carries an ID made of its sender and text, the
-same on every agent, so the hosted side can drop copies.
+What a plugin sends to the hosted Floorbit (syslog lines, flow summaries, ...) goes to a disk
+buffer in the agent's state volume first, so nothing is lost while the hosted side is away or the
+agent restarts. Once it is back, each plugin catches up oldest first. Each plugin's buffer keeps at
+most 2 GB and 24 hours (`FLOORBIT_AGENT_BUFFER_MAX_MB`, `FLOORBIT_AGENT_BUFFER_MAX_HOURS`); past that
+the oldest go first, counted in `floorbit_agent_plugin_dropped`. Every syslog line carries an ID
+made of its sender and text, the same on every agent, so the hosted side can drop copies.
 
 A busy event's switches send syslog and NetFlow in bursts. The agent asks the kernel for an 8 MB
 receive buffer on each port, but Linux caps it at `net.core.rmem_max` (often 208 KB): on the agent
@@ -68,8 +78,9 @@ machine's 127.0.0.1 only):
 - `GET /healthz` (never needs the token, for local checks): 200 while the hosted Floorbit answered in the last two minutes, 503 otherwise,
   with the reason and whether the WebSocket link is up.
 - `GET /metrics`: Prometheus text. Covers the link and connection, calls by method and outcome and how long
-  they took, round trips to the hosted Floorbit, reconnects and link drops, syslog received, sent,
-  dropped and waiting, and NetFlow packets and summaries sent.
+  they took, round trips to the hosted Floorbit, reconnects and link drops, and each plugin's own
+  numbers as `floorbit_agent_plugin_<name>{plugin="<id>"}` (syslog received, dropped and waiting,
+  NetFlow packets and summaries, what waits in the buffer).
 
 It's all counts and timings: no IPs, names, log lines or keys. To scrape it from another machine,
 publish the port on the LAN and set `FLOORBIT_AGENT_METRICS_TOKEN` (it guards `/metrics` only); Prometheus then sends it as a
@@ -89,14 +100,13 @@ See [docs/vrrp.md](docs/vrrp.md).
 
 ## The check-in note (Captive Portal API)
 
-With `FLOORBIT_AGENT_CAPTIVE=0.0.0.0:8908`, the agent answers `/.well-known/captive-portal`
+With the plugin **Check-in note on phones** turned on for it in Floorbit (address
+`0.0.0.0:8908`), the agent answers `/.well-known/captive-portal`
 (RFC 8908). Point DHCP option 114 at it, through the event's HTTPS reverse proxy, and phones and
 laptops show a quiet "sign in to network" note until their seat has checked in. Nothing is ever
 blocked. See Floorbit's
 [docs/integrations.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/integrations.md#the-sign-in-to-network-note-captive-portal-api).
 With VRRP, point option 114 at a virtual IP, so the note keeps working when one agent is down.
-`/metrics` counts the answers (`floorbit_agent_captive_answers_total`, by `captive` or `done`) and says
-how many clients the last list counts as checked in and how old that list is; never an IP.
 
 The same port answers the crew's seat walk-through (Floorbit's
 [docs/seat-walk.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/seat-walk.md)): a

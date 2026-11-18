@@ -8,7 +8,6 @@ import pytest
 
 import floorbit_agent as agent_mod
 from floorbit_agent import metrics as metrics_mod
-from floorbit_agent.syslog_relay import Relay
 from tests.test_agent import FakeHost, make
 
 
@@ -69,21 +68,6 @@ def test_hosted_round_trips_and_failures_are_counted():
         bad.hello()
     assert sample(a.metrics.render(), 'floorbit_agent_hosted_request_seconds_count', kind='hello') == 1
     assert sample(bad.metrics.render(), 'floorbit_agent_hosted_errors_total', kind='hello') == 1
-
-
-def test_relays_report_their_own_numbers():
-    relay = Relay(lambda lines, dropped: None, 0, backlog=2, log=lambda *_: None)
-    for i in range(3):
-        relay.receive(f'<14>line {i}', '192.0.2.9')
-    m = metrics_mod.Metrics()
-    m.collect(metrics_mod.relay_collector(syslog=relay))
-    text = m.render()
-    assert sample(text, 'floorbit_agent_syslog_received_total') == 3
-    assert sample(text, 'floorbit_agent_syslog_dropped_total') == 1
-    assert sample(text, 'floorbit_agent_syslog_backlog') == 2
-    relay.flush_once()
-    assert sample(m.render(), 'floorbit_agent_syslog_sent_total') == 2
-    assert '192.0.2.9' not in m.render()
 
 
 def test_a_broken_collector_does_not_hide_the_rest():

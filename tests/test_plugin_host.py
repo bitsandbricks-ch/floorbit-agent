@@ -322,19 +322,20 @@ def test_plugins_without_an_agent_part_follow_the_hosted_side(tmp_path):
 
     from floorbit_agent.plugin_host import LocalPlugins
     store = SettingsStore(str(tmp_path / "data.json"), environ={"LIBRENMS_TOKEN": "hall-token"})
+    store.ignore_env({"librenms.token"})      # env_settings.ignore: the agent's env no longer counts
     registry = FakeRegistry(store, on={"netbox"})
     lines = []
-    local = LocalPlugins(flask.Flask("t"), registry, str(tmp_path), pinned=["pihole"], log=lines.append)
+    local = LocalPlugins(flask.Flask("t"), registry, str(tmp_path), log=lines.append)
     local.apply({"librenms": {"settings": {"librenms.url": "https://librenms.example.com", "librenms.token": "hosted"}},
                  "pihole": {"settings": {}}, "unifi": {"settings": {}}})
     assert registry.on == {"netbox", "librenms", "pihole"}
-    # Settings from the hosted side, kept in memory; the agent's own env still wins.
-    assert rt.librenms_url == "https://librenms.example.com" and rt.librenms_token == "hall-token"
+    # Settings from the hosted side, kept in memory; the agent's own env no longer counts.
+    assert rt.librenms_url == "https://librenms.example.com" and rt.librenms_token == "hosted"
     assert not (tmp_path / "data.json").exists()
     assert any("unifi, which this agent does not have" in line for line in lines)
-    # Turned off there: off here, except what the hall pinned and what was on before.
+    # Turned off there: off here, except what was on before.
     local.apply({})
-    assert registry.on == {"netbox", "pihole"} and rt.librenms_url == ""
+    assert registry.on == {"netbox"} and rt.librenms_url == ""
     # Remembered across a restart.
     local.apply({"librenms": {"settings": {}}})
     again = LocalPlugins(flask.Flask("t"), registry, str(tmp_path), log=lines.append)

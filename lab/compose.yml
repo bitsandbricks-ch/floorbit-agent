@@ -29,13 +29,7 @@ x-agent: &agent
     FLOORBIT_URL: http://172.31.10.2:5000
     # Plain HTTP inside the lab network only; at an event it is always https://.
     FLOORBIT_AGENT_INSECURE: "1"
-    LIBRENMS_URL: http://172.31.10.5:8000
-    LIBRENMS_TOKEN: lab-librenms-token
-    FLOORBIT_AGENT_SYSLOG_PORT: "5514"
-    FLOORBIT_AGENT_FLOWS_PORT: "2055"
-    FLOORBIT_AGENT_CAPTIVE: 0.0.0.0:8908
-    # The tests ask as a reverse proxy would, naming the player in X-Forwarded-For.
-    FLOORBIT_AGENT_CAPTIVE_PROXIES: 172.31.10.60
+    # LibreNMS, syslog, NetFlow and the check-in note are set up in Floorbit by the setup step.
   volumes:
     - keys:/keys:ro
     - lancache:/lancache:ro

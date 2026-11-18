@@ -1,12 +1,12 @@
 # The local agent for a hosted Floorbit (README.md). Run it on the event network, next to
 # LibreNMS and NetBox, not on the hosted server:
 #
-#   cp agent.env.example agent.env      # FLOORBIT_URL, FLOORBIT_AGENT_KEY, LibreNMS, NetBox
+#   cp agent.env.example agent.env      # FLOORBIT_URL and FLOORBIT_AGENT_KEY
 #   docker compose up -d
 #
-# It only connects out, over HTTPS: nothing has to be opened. Only to take the event's syslog
-# (FLOORBIT_AGENT_SYSLOG_PORT=5514 in agent.env) or flows (FLOORBIT_AGENT_FLOWS_PORT=2055),
-# uncomment the matching ports below.
+# It only connects out, over HTTPS: nothing has to be opened. Its plugins are set up in the hosted
+# Floorbit (Settings > Plugins). For those that listen in the hall (syslog, flows, the check-in note,
+# the front door), uncomment the matching ports below, with the port set in the plugin on the right.
 
 services:
   agent:
@@ -22,13 +22,14 @@ services:
     ports:
       # /metrics and /healthz for Prometheus, on this machine only (README.md, "Monitor it").
       - "127.0.0.1:9520:9520"
+    # Syslog from the hall (plugin port 5514) and Traffic from the hall (NetFlow, 2055):
     #   - "514:5514/udp"
     #   - "2055:2055/udp"
     # A firewall's own Telegraf (OPNsense os-telegraf, pfSense) sending to the agent's telemetry listener:
     #   - "8186:8186"
-    # The Captive Portal API (FLOORBIT_AGENT_CAPTIVE=0.0.0.0:8908), for the event's HTTPS reverse proxy:
+    # Check-in note on phones (address 0.0.0.0:8908), for the event's HTTPS reverse proxy:
     #   - "8908:8908"
-    # The attendee front door (FLOORBIT_AGENT_FRONT_DOOR=0.0.0.0:8443): check-in and the seat speed test:
+    # Front door for attendees (address 0.0.0.0:8443): check-in and the seat speed test:
     #   - "443:8443"
     # A refused key (revoked or wrong) stops the agent with exit code 1: don't restart it into
     # the same refusal every few seconds. Network trouble doesn't stop it; it retries by itself.

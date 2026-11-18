@@ -5,9 +5,12 @@
 
 Signs in as the admin, enrols each agent and writes its key to <out>/<name>.key (the agents read
 it at start); an agent whose key file is there already is left alone, so a restart keeps its keys.
-Then, if the plan has no seats yet, it adds what lab/topology.py describes: the switches and
-firewalls to the inventory (with their management addresses, so syslog finds its device) and one
-seat block per access switch. Standard library only.
+It sets up the agents' plugins in Floorbit, as the crew would at an event (the agents read none
+of it from their own environment): the lab LibreNMS, syslog and NetFlow from the hall and the
+check-in note. With --listeners-on, only that agent runs the ones that listen (two agents on one
+machine can't take the same port). Then, if the plan has no seats yet, it adds what
+lab/topology.py describes: the switches and firewalls to the inventory (with their management
+addresses, so syslog finds its device) and one seat block per access switch. Standard library only.
 """
 import argparse
 import http.cookiejar
@@ -67,6 +70,32 @@ class Client:
             raise SystemExit(f'Signed in as {user}, but the agents list answers {status}: is it an admin?')
 
 
+def plugins(fb, args):
+    """The lab's plugins, set up and turned on in Floorbit (Settings > Plugins)."""
+    settings = {
+        'librenms.url': args.librenms_url, 'librenms.token': args.librenms_token,
+        'plugin.syslog-relay.port': args.syslog_port,
+        'plugin.netflow-relay.port': args.flows_port,
+        'plugin.captive-note.address': args.captive, 'plugin.captive-note.proxies': args.captive_proxies,
+    }
+    status, body = fb.call('PATCH', '/api/settings', settings)
+    if status != 200:
+        raise SystemExit(f'Setting up the plugins failed: {status} {body}')
+    listeners = ['syslog-relay', 'netflow-relay', 'captive-note']
+    for pid in ['librenms', *listeners]:
+        status, body = fb.call('PUT', f'/api/settings/plugins/{pid}', {'enabled': True})
+        if status != 200:
+            raise SystemExit(f'Turning on {pid} failed: {status} {body}')
+    if args.listeners_on:
+        _, body = fb.call('GET', '/api/agents')
+        for agent in body.get('agents', []):
+            off = [] if agent['name'] == f'Lab {args.listeners_on}' else listeners
+            status, answer = fb.call('PATCH', f'/api/agents/{agent["id"]}', {'plugins_off': off})
+            if status != 200:
+                raise SystemExit(f'Leaving the listeners off on {agent["name"]} failed: {status} {answer}')
+    print('Set up the plugins: LibreNMS, syslog, NetFlow, the check-in note.')
+
+
 def seed(fb):
     """The lab hall: inventory, switches placed, a seat block per access switch. Only on an empty plan."""
     _, blocks = fb.call('GET', '/api/seat-blocks')
@@ -104,6 +133,14 @@ def main(argv=None):
     p.add_argument('--out', type=pathlib.Path, default=pathlib.Path(os.environ.get('LAB_KEYS', '/keys')))
     p.add_argument('--user', default=os.environ.get('AUTH_ADMIN_USER', 'admin'))
     p.add_argument('--password', default=os.environ.get('AUTH_ADMIN_PASSWORD', ''))
+    p.add_argument('--librenms-url', default='http://172.31.10.5:8000')
+    p.add_argument('--librenms-token', default='lab-librenms-token')
+    p.add_argument('--syslog-port', type=int, default=5514)
+    p.add_argument('--flows-port', type=int, default=2055)
+    p.add_argument('--captive', default='0.0.0.0:8908')
+    # The tests ask as a reverse proxy would, naming the player in X-Forwarded-For.
+    p.add_argument('--captive-proxies', default='172.31.10.60')
+    p.add_argument('--listeners-on', default='', help='the one agent that runs syslog, NetFlow and the note')
     args = p.parse_args(argv)
     fb = Client(args.url)
     fb.wait()
@@ -117,6 +154,7 @@ def main(argv=None):
         path.write_text(body['key'])
         os.chmod(path, 0o644)        # the agent runs as another user; lab keys only
         print(f'Enrolled {name} as {body["id"]}')
+    plugins(fb, args)
     seed(fb)
     return 0
 

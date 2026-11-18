@@ -1,9 +1,10 @@
 """NetFlow and IPFIX through the local agent (issue #2). See Floorbit's docs/agent.md, "Traffic".
 
-The agent runs the same flow collector as a Floorbit of your own (floorbit/flows), on
-``FLOORBIT_AGENT_FLOWS_PORT``, and sends only its summary on: hall, area and service totals and the
-per-seat volume and mix, the same aggregates the Traffic page shows. The flow records themselves,
-with addresses and ports, stay on the agent (``FLOWS_DIR``, for ``FLOWS_RETENTION_DAYS``).
+The agent runs the same flow collector as a Floorbit of your own (floorbit/flows), on the port of
+the plugin "Traffic from the hall" (turned on in Floorbit), and sends only its summary on: hall,
+area and service totals and the per-seat volume and mix, the same aggregates the Traffic page
+shows. The flow records themselves, with addresses and ports, stay on the agent (``FLOWS_DIR``,
+for ``FLOWS_RETENTION_DAYS``).
 
 To count per seat it needs the seats' addresses: it asks the hosted Floorbit for them every minute.
 """

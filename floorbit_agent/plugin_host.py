@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import json
+import math
 import os
 import socket
 import ssl
@@ -39,8 +40,26 @@ RESTART_FIRST = 5
 RESTART_MAX = 300
 RESTART_LOUD = 5
 RESTART_RESET = 600
-SPOOL_MAX_BYTES = 256 * 1024 ** 2
-SPOOL_MAX_AGE = 24 * 3600
+# What a plugin keeps on disk while the hosted side is away, each plugin on its own; the defaults
+# are those of the syslog buffer from before syslog was a plugin.
+SPOOL_MAX_MB = 2048
+SPOOL_MAX_HOURS = 24
+
+
+def spool_limits(env):
+    """The disk buffer's size and age from ``FLOORBIT_AGENT_BUFFER_MAX_MB`` and ``_MAX_HOURS``.
+    Anything that is no size (``0``, ``-1``, ``nan``, ``lots``) keeps the default: without the
+    buffer a plugin's records would have nowhere to wait."""
+    def number(name, default):
+        try:
+            value = float(env.get(name) or default)
+        except ValueError:
+            return float(default)
+        return value if math.isfinite(value) and value > 0 else float(default)
+    return (int(number('FLOORBIT_AGENT_BUFFER_MAX_MB', SPOOL_MAX_MB) * 1024 ** 2),
+            number('FLOORBIT_AGENT_BUFFER_MAX_HOURS', SPOOL_MAX_HOURS) * 3600)
+
+
 BATCH = 50                 # records a sender posts before it looks at the spool again
 # A plugin's start() or stop() that doesn't return within this is given up on: it must not hold
 # the host's lock, which the report and every other plugin need.
@@ -154,7 +173,8 @@ class AgentContext:
         with self._spool_lock:
             if self._spool is None:
                 from .spool import Spool
-                self._spool = Spool(os.path.join(self.state_dir, 'outbox'), SPOOL_MAX_BYTES, SPOOL_MAX_AGE,
+                max_bytes, max_age = spool_limits(os.environ)
+                self._spool = Spool(os.path.join(self.state_dir, 'outbox'), max_bytes, max_age,
                                     log=self.host.log)
                 self.thread(self._sender, name=f'plugin-{self.id}-send')
             return self._spool
@@ -699,12 +719,11 @@ def agent_specs(registry):
 class LocalPlugins:
     """The plugins without an agent part that the agent runs in its own copy of Floorbit to answer
     the hosted side's calls (LibreNMS, NetBox, Pi-hole, ...). The hosted Floorbit says which are on
-    and with which settings; the settings stay in memory (they hold tokens) and the agent's own
-    environment still wins over them. Plugins named in FLOORBIT_AGENT_PLUGINS stay on regardless."""
+    and with which settings; the settings stay in memory (they hold tokens). The agent's own
+    environment no longer sets them (env_settings.py)."""
 
-    def __init__(self, app, registry, state_root, pinned=(), log=print):
+    def __init__(self, app, registry, state_root, log=print):
         self.app, self.registry, self.log = app, registry, log
-        self.pinned = {p.strip() for p in pinned if p and p.strip()}
         self.path = os.path.join(state_root, 'local-plugins.json')
         try:
             with open(self.path, encoding='utf-8') as f:
@@ -743,7 +762,7 @@ class LocalPlugins:
                 self.log(f'[agent] turned on {pid} (on in the hosted Floorbit)')
             for pid in sorted(self.on - set(local)):
                 self.on.discard(pid)
-                if pid in self.pinned or pid not in self.registry.specs:
+                if pid not in self.registry.specs:
                     continue
                 self.registry.set_enabled(pid, False)
                 self.log(f'[agent] turned off {pid} (off in the hosted Floorbit)')

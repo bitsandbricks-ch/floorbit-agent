@@ -2,7 +2,7 @@
 
 A hosted Floorbit can't take syslog from the event network: the switches' UDP datagrams would have
 to cross the internet, unencrypted and unauthenticated. So the agent listens instead
-(``FLOORBIT_AGENT_SYSLOG_PORT``, off when unset) and sends the lines on over its HTTPS connection,
+(the plugin "Syslog from the hall", turned on in Floorbit) and sends the lines on over its HTTPS connection,
 in batches, with the address each came from and when it arrived. The hosted side checks those
 senders against its allow-list as if they had sent there (floorbit/syslog.py, ``relay``).
 

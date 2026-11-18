@@ -1,6 +1,6 @@
 """The Captive Portal API (RFC 8908) for the event network (Floorbit issue #473).
 
-With ``FLOORBIT_AGENT_CAPTIVE`` set (``host:port``), the agent answers
+With the plugin "Check-in note on phones" turned on in Floorbit, the agent answers
 ``GET /.well-known/captive-portal`` with ``application/captive+json``. The DHCP server hands out the
 URL of that endpoint in option 114 (RFC 8910). Phones and laptops then ask it, and while the answer
 says ``"captive": true`` they show a quiet "sign in to network" note that opens ``user-portal-url``.
@@ -19,7 +19,7 @@ browser back to Floorbit. ``back`` must be on the Floorbit the agent talks to; a
 short page instead of a redirect, so this is no open redirect.
 
 RFC 8908 wants HTTPS for this URL, so serve it behind the event's reverse proxy with a certificate.
-Put that proxy's address in ``FLOORBIT_AGENT_CAPTIVE_PROXIES`` so the client's own IP is taken from
+Put that proxy's address in the plugin's trusted proxies so the client's own IP is taken from
 ``X-Forwarded-For``.
 """
 import html
