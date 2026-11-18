@@ -47,7 +47,8 @@ def test_a_packet_the_collector_cannot_read_does_not_stop_the_listener():
             assert wait_for(lambda: collector.got == [b"good"])
         assert relay.dropped == 2 and relay.packets == 3
         assert any("could not read" in line for line in lines)
-        assert any("housekeeping failed" in line for line in lines)
+        # Housekeeping runs on its own thread once a second; one that fails is tried again.
+        assert wait_for(lambda: any("housekeeping failed" in line for line in lines) and collector.chores >= 2)
         assert "agent-flows" in {t.name for t in threading.enumerate()}
     finally:
         relay.stop()
