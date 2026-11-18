@@ -125,7 +125,9 @@ class Captive:
             self.say_hello(code, ip)
         except Exception as exc:  # noqa: BLE001  # the page says why, the crew tries again
             return 502, None, f'Floorbit did not take it: {exc}'
-        if back and self.floorbit_url:
+        # urlsplit drops tabs and line breaks before it looks, but send_header would not: a back
+        # with "\r\n" in it passed the check and split the response (a header or a page of its own).
+        if back and self.floorbit_url and not any(ord(c) < 32 or ord(c) == 127 for c in back):
             want, got = urlsplit(self.floorbit_url), urlsplit(back)
             if (got.scheme, got.netloc) == (want.scheme, want.netloc):
                 return 303, back, ''

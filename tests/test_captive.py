@@ -94,7 +94,10 @@ def test_the_seat_walk_hello_sends_the_laptop_back_only_to_its_floorbit():
     assert api.hello(CODE, "192.0.2.50", back) == (303, back, "")
     assert said == [(CODE, "192.0.2.50")]
     # Another host, or no back at all: a short page, never a redirect somewhere else.
-    for other in ("https://evil.example.net/seat-walk", "http://floor.example.com/seat-walk", ""):
+    for other in ("https://evil.example.net/seat-walk", "http://floor.example.com/seat-walk", "",
+                  # urlsplit drops line breaks before it compares: the header must not get them
+                  "https://floor.example.com/seat-walk\r\nSet-Cookie: x=1",
+                  "https://floor.example.com/\r\n\r\n<script>alert(1)</script>"):
         status, location, text = api.hello(CODE, "192.0.2.50", other)
         assert (status, location) == (200, None) and "192.0.2.50" in text
 

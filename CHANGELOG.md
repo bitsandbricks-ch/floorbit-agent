@@ -48,6 +48,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Security
 
+- The seat walk-through hello no longer redirects to a `back` address with a line break in it. Such an address passed the same-Floorbit check and split the response, so a link could set a cookie or add a page on the captive address.
 - The agent no longer follows redirects from the hosted Floorbit. Its key travels in its own header, which a redirect to another host (even plain http) took along. A redirect now says where it points, and the agent keeps trying.
 - A laptop on the hall network could make the agent send seat walk-through hellos to the hosted Floorbit as fast as it answered. One address now gets 10 hellos a minute; the rest get a 429 page without reaching Floorbit.
 - Game server queries no longer go to link-local addresses (`169.254.169.254`, where clouds keep their metadata service): Python counts them as private, so they passed the private-only check.
