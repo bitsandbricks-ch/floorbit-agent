@@ -372,5 +372,5 @@ def test_a_syslog_batch_too_big_for_the_hosted_side_goes_in_halves():
     a = make(host)
     lines = [{"raw": f"<14>line {i}", "from": "192.0.2.9"} for i in range(10)]
     assert a.send_syslog(lines)["taken"] == 10
-    huge = lines[:3] + [{"raw": "<14>" + "x" * 2000, "from": "192.0.2.9"}]
+    huge = [*lines[:3], {"raw": "<14>" + "x" * 2000, "from": "192.0.2.9"}]
     assert a.send_syslog(huge)["taken"] == 3       # the one line still too big is skipped
