@@ -19,7 +19,9 @@ import json
 import math
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+
+from . import http_limits
 
 BUCKETS = (0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60)
 
@@ -214,6 +216,8 @@ def serve(metrics, agent, address, healthy_for, token=None, log=print):
         return None
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = http_limits.IDLE_SECONDS
+
         def _send(self, status, body, kind):
             data = body.encode()
             self.send_response(status)
@@ -245,7 +249,7 @@ def serve(metrics, agent, address, healthy_for, token=None, log=print):
             pass
 
     try:
-        server = ThreadingHTTPServer((host or '0.0.0.0', port), Handler)
+        server = http_limits.LimitedHTTPServer((host or '0.0.0.0', port), Handler)
     except OSError as exc:
         log(f'[agent] cannot serve metrics on {address}: {exc}')
         return None

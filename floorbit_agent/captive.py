@@ -28,8 +28,10 @@ import json
 import re
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlsplit
+
+from . import http_limits
 
 PATH = '/.well-known/captive-portal'
 HELLO_PATH = re.compile(r'^/floorbit/hello/([A-Za-z0-9_-]{16,64})$')
@@ -126,6 +128,8 @@ def serve(captive, address, log=print):
     port = int(port)
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = http_limits.IDLE_SECONDS     # a phone that opens and says nothing lets go
+
         def do_GET(self):  # the name http.server asks for
             path, _, query = self.path.partition('?')
             hello = HELLO_PATH.match(path)
@@ -161,8 +165,7 @@ def serve(captive, address, log=print):
         def log_message(self, *args):   # every phone asks: not news
             pass
 
-    server = ThreadingHTTPServer((host or '0.0.0.0', port), Handler)
-    server.daemon_threads = True
+    server = http_limits.LimitedHTTPServer((host or '0.0.0.0', port), Handler, shared=captive.proxies)
     threading.Thread(target=server.serve_forever, name='agent-captive', daemon=True).start()
     threading.Thread(target=captive.run, name='agent-captive-refresh', daemon=True).start()
     log(f'[captive] Captive Portal API on http://{address}{PATH}')
