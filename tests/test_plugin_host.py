@@ -496,3 +496,60 @@ def test_a_client_that_stalls_gives_its_thread_back(setup, monkeypatch):
         started = time.time()
         assert s.recv(10) == b""          # the server closed it
         assert time.time() - started < 2.5
+
+
+def test_a_thread_that_dies_is_started_again_with_backoff(setup, monkeypatch):
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    waits, runs = [], []
+    monkeypatch.setattr(ctx.stopping, "wait", lambda s: waits.append(s) or False)
+
+    def flaky():
+        runs.append(1)
+        if len(runs) < 8:
+            raise OSError("device away")
+
+    ctx.thread(flaky).join(5)
+    assert len(runs) == 8                                  # the eighth run returned: done
+    assert waits == [5, 10, 20, 40, 80, 160, 300]          # doubling, capped at five minutes
+    report = host.report()["hallthing"]
+    assert report["metrics"]["thread_restarts"] == 7
+    assert "failed 7 times in a row" in report["message"]
+    assert "starting it again in 300 s" in report["errors"][-1]["error"]
+
+
+def test_a_stopped_plugin_does_not_restart_its_thread(setup):
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    runs = []
+
+    def dies():
+        runs.append(1)
+        ctx.stopping.set()
+        raise OSError("device away")
+
+    ctx.thread(dies).join(5)
+    assert runs == [1]
+
+
+def test_a_long_healthy_run_resets_the_backoff(setup, monkeypatch):
+    from floorbit_agent import plugin_host
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    waits, runs = [], []
+    clock = [0.0]
+    monkeypatch.setattr(plugin_host.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ctx.stopping, "wait", lambda s: waits.append(s) or False)
+
+    def flaky():
+        runs.append(1)
+        if len(runs) == 3:
+            clock[0] += plugin_host.RESTART_RESET     # this run went well for a long time
+        if len(runs) < 5:
+            raise OSError("device away")
+
+    ctx.thread(flaky).join(5)
+    assert waits == [5, 10, 5, 10]

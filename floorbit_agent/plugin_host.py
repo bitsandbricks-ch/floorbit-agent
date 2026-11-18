@@ -29,6 +29,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PULL_EVERY = 60
 PULL_UNSUPPORTED = 600     # a hosted Floorbit without agent plugins: ask again this rarely
 SEND_RETRY = 10
+# A plugin thread that raises is started again, waiting longer each time (5 s, 10 s, ... up to
+# 5 min), so one bad device doesn't stop a plugin for the rest of the event. After RESTART_LOUD
+# restarts in a row its health says it keeps failing; a run of RESTART_RESET seconds counts as healthy.
+RESTART_FIRST = 5
+RESTART_MAX = 300
+RESTART_LOUD = 5
+RESTART_RESET = 600
 SPOOL_MAX_BYTES = 256 * 1024 ** 2
 SPOOL_MAX_AGE = 24 * 3600
 BATCH = 50                 # records a sender posts before it looks at the spool again
@@ -215,12 +222,28 @@ class AgentContext:
     # threads and listeners --------------------------------------------------------------
     def thread(self, fn, name=None):
         """Run ``fn`` in a thread of the plugin's; it should return once ``ctx.stopping`` is set."""
+        label = getattr(fn, '__name__', 'thread')
+
         def run():
-            try:
-                fn()
-            except Exception as exc:  # noqa: BLE001  # say it; the rest of the agent goes on
-                self.health('error', f'{getattr(fn, "__name__", "thread")} stopped: {type(exc).__name__}: {exc}')
-                self.error(f'{getattr(fn, "__name__", "thread")} stopped: {type(exc).__name__}: {exc}')
+            failures = 0
+            while not self.stopping.is_set():
+                began = time.monotonic()
+                try:
+                    fn()
+                    return
+                except Exception as exc:  # noqa: BLE001  # say it, wait, start it again
+                    if time.monotonic() - began >= RESTART_RESET:
+                        failures = 0
+                    failures += 1
+                    wait = min(RESTART_MAX, RESTART_FIRST * 2 ** (failures - 1))
+                    why = f'{label} stopped: {type(exc).__name__}: {exc}'
+                    self.counter('thread_restarts')
+                    self.error(f'{why}; starting it again in {wait} s')
+                    if failures >= RESTART_LOUD:
+                        self.health('error', f'{why} (failed {failures} times in a row; next try in {wait} s)')
+                    else:
+                        self.health('error', f'{why}; starting it again in {wait} s')
+                    self.stopping.wait(wait)
         t = threading.Thread(target=run, name=name or f'plugin-{self.id}', daemon=True)
         self._threads.append(t)
         t.start()

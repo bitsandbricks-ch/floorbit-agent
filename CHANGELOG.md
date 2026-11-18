@@ -35,6 +35,7 @@ All notable changes to this project are listed here. The format follows
 
 - Built and tested on Floorbit with the night's work in it (`FLOORBIT_REF`).
 - The work from #8 to #15 reaches `main`: those pull requests were merged into stack branches that had already gone in.
+- A plugin thread that stops with an error is started again: after 5 seconds, then 10, 20 and so on, up to 5 minutes. Before, it stayed stopped until the agent restarted. After five failures in a row, the plugin's health says how often it failed; a run of 10 minutes resets the count. `/metrics` counts the restarts (`thread_restarts`).
 
 ### Fixed
 
