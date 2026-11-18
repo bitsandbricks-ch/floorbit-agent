@@ -72,7 +72,9 @@ UDP and sends them on, the flows only as a summary.
   crew got from a signed-in Floorbit page in the last ten minutes, the hosted side refuses it. A code
   is used once. With a stolen code an attendee could only make that walk-through step find their own
   seat's port, which the crew sees on the page. The redirect back goes only to the `FLOORBIT_URL`
-  origin, so the endpoint is no open redirect, and its page escapes everything it shows.
+  origin, so the endpoint is no open redirect, and its page escapes everything it shows. Each hello
+  is a request to the hosted Floorbit, so one address gets 10 a minute; the rest are answered 429
+  without asking Floorbit.
 - **Flood the UDP ports:** the syslog backlog has a fixed size, the newest lines are dropped and
   counted (`floorbit_agent_syslog_dropped_total`), and memory stays bounded.
 - **Send broken or crafted flow packets:** a packet the collector can't read is skipped and counted;

@@ -47,6 +47,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Security
 
+- A laptop on the hall network could make the agent send seat walk-through hellos to the hosted Floorbit as fast as it answered. One address now gets 10 hellos a minute; the rest get a 429 page without reaching Floorbit.
 - Game server queries no longer go to link-local addresses (`169.254.169.254`, where clouds keep their metadata service): Python counts them as private, so they passed the private-only check.
 - Game queries and service probes check an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it reaches, also on Python releases that don't do so themselves.
 - Game queries and service probes also check the IPv4 address inside NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) and 6to4 (`2002::/16`) addresses: Python calls `64:ff9b:1::a9fe:a9fe` private, but on a NAT64 network it is the metadata service at `169.254.169.254`. Probes now refuse this machine and link-local addresses even when `FLOORBIT_AGENT_PROBE_NETS` would allow them.
