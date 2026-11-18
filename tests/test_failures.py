@@ -206,3 +206,44 @@ def test_server_errors_are_retried_not_fatal(status, monkeypatch):
     a.stop()
     t.join(5)
 
+
+
+def test_a_call_it_cannot_read_is_skipped_and_the_rest_still_run():
+    """Before: a call that wasn't an object ended the whole poll (and on the link, the link),
+    so the good calls behind it were lost and the agent reconnected."""
+    from tests.test_agent import FakeHost, Resp
+
+    class Odd(FakeHost):
+        def get(self, url, params=None, headers=None, timeout=None):
+            if url.endswith("/calls"):
+                return Resp(200, {"calls": ["nonsense", {"method": "health"}, {"id": "c1", "method": "health"}]})
+            return super().get(url, params, headers, timeout)
+
+    host = Odd()
+    ran = []
+    a = agent_mod.Agent("https://floor.example.com", "fba_x_y", lambda m, args: ran.append(m) or "ok",
+                        http=host, log=lambda *_: None)
+    assert a.poll(0) == 3
+    assert wait_for(lambda: any(p[2].get("answers", [{}])[0].get("id") == "c1" for p in host.posts), 5)
+    assert ran == ["health"]
+    assert a.metrics.total("floorbit_agent_calls_total", outcome="unreadable") == 2
+
+
+def test_a_426_from_a_proxy_page_still_stops_the_agent():
+    """A 426 that isn't JSON (a proxy's own page) raised ValueError, so the agent retried forever
+    instead of saying one side must be updated."""
+    from tests.test_agent import FakeHost
+
+    class NotJson:
+        status_code = 426
+
+        def json(self):
+            raise ValueError("Expecting value")
+
+    class Host(FakeHost):
+        def get(self, url, params=None, headers=None, timeout=None):
+            return NotJson()
+
+    with pytest.raises(agent_mod.Refused, match="another agent protocol"):
+        agent_mod.Agent("https://floor.example.com", "fba_x_y", lambda m, a: [], http=Host(),
+                        log=lambda *_: None).hello()

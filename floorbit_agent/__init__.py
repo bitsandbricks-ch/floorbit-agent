@@ -83,6 +83,15 @@ def _within(seconds, open_it, late=None):
     return out['value']
 
 
+def _error_of(resp):
+    """The ``error`` of a JSON answer, or None when it is not JSON (a proxy's own page)."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    return body.get('error') if isinstance(body, dict) else None
+
+
 class Refused(RuntimeError):
     """The hosted Floorbit refused the key: retrying won't help."""
 
@@ -367,7 +376,7 @@ class Agent:
                           'Enrol the agent again.')
         if resp.status_code == 426:
             # Retrying won't help: one of the two has to be updated.
-            raise Refused((resp.json() or {}).get('error') or 'The hosted Floorbit speaks another agent protocol.')
+            raise Refused(_error_of(resp) or 'The hosted Floorbit speaks another agent protocol.')
         resp.raise_for_status()
         return resp.json()
 
@@ -417,6 +426,8 @@ class Agent:
                 self.beat()
                 self.last_contact = time.time()
                 message = json.loads(raw)
+                if not isinstance(message, dict):
+                    continue          # nothing a Floorbit sends: not worth dropping the link for
                 if message.get('type') == 'calls':
                     for call in message.get('calls') or []:
                         self.take(call)
@@ -505,6 +516,11 @@ class Agent:
 
     def take(self, call):
         """Queue one call in its method's pool, or answer "busy" when too many of that kind wait."""
+        if not isinstance(call, dict) or not isinstance(call.get('id'), (str, int)):
+            # No id: nothing to answer to. Skipped here, one odd call doesn't end the poll or the link.
+            self.metrics.inc('floorbit_agent_calls_total', {'method': 'other', 'outcome': 'unreadable'})
+            self.log(f'[agent] skipped a call it cannot read: {str(call)[:120]!r}')
+            return
         method = call.get('method') if call.get('method') in METHODS else 'other'
         with self._running_lock:
             if self._waiting.get(method, 0) >= MAX_WAITING:
@@ -564,13 +580,13 @@ class Agent:
         from .syslog_relay import TurnedOff
         resp = self._post('/api/agent/v1/syslog', {'lines': lines, 'dropped': dropped})
         if resp.status_code == 409:
-            raise TurnedOff((resp.json() or {}).get('error') or 'Syslog is turned off on the hosted Floorbit.')
+            raise TurnedOff(_error_of(resp) or 'Syslog is turned off on the hosted Floorbit.')
         return self._check(resp)
 
     def _said(self, resp):
         """409: the hosted side has the feature off, and says so."""
         if resp.status_code == 409:
-            raise RuntimeError((resp.json() or {}).get('error') or 'turned off on the hosted Floorbit')
+            raise RuntimeError(_error_of(resp) or 'turned off on the hosted Floorbit')
         return self._check(resp)
 
     def flow_seats(self):
@@ -586,7 +602,7 @@ class Agent:
         """The crew laptop with this walk-through code is at ``ip`` (captive.py's hello)."""
         resp = self._post('/api/agent/v1/seat-walk', {'token': token, 'ip': ip})
         if resp.status_code == 404:
-            raise RuntimeError((resp.json() or {}).get('error') or 'this Floorbit has no seat walk-through')
+            raise RuntimeError(_error_of(resp) or 'this Floorbit has no seat walk-through')
         return self._check(resp)
 
     def send_flows(self, snapshot):
