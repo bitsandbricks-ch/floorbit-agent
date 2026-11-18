@@ -7,7 +7,6 @@ import time
 
 import pytest
 
-import floorbit_agent as agent_mod
 from floorbit_agent import syslog_relay
 from floorbit_agent.spool import Spool
 
@@ -170,54 +169,21 @@ def test_files_are_private_to_the_agent(tmp_path):
     assert oct(os.stat(spool.folder).st_mode & 0o777) == '0o700'
 
 
-def test_open_buffer_settings(tmp_path):
-    env = {'FLOORBIT_DATA_FILE': str(tmp_path / 'agent-data.json')}
-    spool = agent_mod.open_buffer('syslog', env, out=lambda *_: None)
-    assert spool.folder == str(tmp_path / 'buffer' / 'syslog') and spool.max_bytes == 2048 * 1024 ** 2
-    assert agent_mod.open_buffer('syslog', {**env, 'FLOORBIT_AGENT_BUFFER_MAX_MB': '0'}, out=lambda *_: None) is None
-    said = []
-    assert agent_mod.open_buffer('syslog', {**env, 'FLOORBIT_AGENT_BUFFER_MAX_MB': 'lots'}, out=said.append) is None
-    assert 'must be numbers' in said[0]
+def test_buffer_limits_come_from_the_environment():
+    from floorbit_agent.plugin_host import spool_limits
+    assert spool_limits({}) == (2048 * 1024 ** 2, 24 * 3600)
+    assert spool_limits({'FLOORBIT_AGENT_BUFFER_MAX_MB': '512', 'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '6'}) == \
+        (512 * 1024 ** 2, 6 * 3600)
 
 
 @pytest.mark.parametrize('setting', [
-    {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'inf'}, {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'nan'},
-    {'FLOORBIT_AGENT_BUFFER_MAX_MB': '1e400'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': 'nan'},
+    {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'lots'}, {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'inf'},
+    {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'nan'}, {'FLOORBIT_AGENT_BUFFER_MAX_MB': '1e400'},
+    {'FLOORBIT_AGENT_BUFFER_MAX_MB': '0'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': 'nan'},
     {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '0'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '-1'}])
-def test_a_buffer_number_that_is_no_size_turns_the_buffer_off_not_syslog(tmp_path, monkeypatch, setting):
-    env = {'FLOORBIT_DATA_FILE': str(tmp_path / 'agent-data.json'), **setting}
-    said = []
-    assert agent_mod.open_buffer('syslog', env, out=said.append) is None
-    assert 'must be numbers' in said[0]
-    # The relay still starts and keeps lines in memory; it used to fail with the buffer.
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    monkeypatch.setenv('FLOORBIT_AGENT_SYSLOG_BIND', '127.0.0.1')
-
-    class Sender:
-        def send_syslog(self, lines):
-            return True
-
-    relay = agent_mod.start_syslog(Sender(), '0', out=said.append)
-    try:
-        assert relay and relay.spool is None
-    finally:
-        if relay:
-            relay.stop()
-
-
-def test_metrics_count_the_buffer(tmp_path):
-    from floorbit_agent.metrics import Metrics, relay_collector
-    hosted = Hosted()
-    r = relay(hosted, tmp_path)
-    r.spool.put([{'raw': 'x', 'id': 'x'}, {'raw': 'y', 'id': 'y'}])
-    r.receive('live', '192.0.2.21')
-    m = Metrics()
-    m.collect(relay_collector(r, None))
-    text = m.render()
-    assert 'floorbit_agent_buffer_records{kind="syslog"} 2' in text
-    assert 'floorbit_agent_syslog_backlog 3' in text
-    assert json.dumps(r.spool.oldest()[1][0])               # plain JSON on disk
+def test_a_buffer_number_that_is_no_size_keeps_the_default(setting):
+    from floorbit_agent.plugin_host import spool_limits
+    assert spool_limits(setting) == (2048 * 1024 ** 2, 24 * 3600)
 
 
 def test_a_burst_of_syslog_is_read_by_one_thread_with_room_in_the_kernel():

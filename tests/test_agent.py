@@ -68,14 +68,14 @@ def test_gzip_only_after_hello_says_so():
     host = FakeHost()
     a = make(host)
     big = [{"raw": "<14>" + "x" * 100, "from": "192.0.2.9", "at": 1}] * 100
-    a.send_syslog(big)
+    a._post("/api/agent/v1/report", {"lines": big})
     assert "Content-Encoding" not in host.posts[-1][1]
     a.hello()
-    a.send_syslog(big)
+    a._post("/api/agent/v1/report", {"lines": big})
     assert host.posts[-1][1]["Content-Encoding"] == "gzip" and len(host.posts[-1][2]["lines"]) == 100
     old = make(FakeHost(hello={"name": "Old", "server_version": "0.0.1"}))   # no "encodings": plain
     old.hello()
-    old.send_syslog(big)
+    old._post("/api/agent/v1/report", {"lines": big})
     assert "Content-Encoding" not in old.http.posts[-1][1]
 
 
@@ -86,8 +86,10 @@ def test_a_refusal_stops_the_agent(status):
 
 
 def test_syslog_off_on_the_host_drops_the_backlog():
-    a = make(FakeHost(status=409))
-    relay = Relay(a.send_syslog, 0, log=lambda *_: None)
+    def turned_off(lines, dropped):
+        raise TurnedOff("Syslog is turned off on this Floorbit.")
+
+    relay = Relay(turned_off, 0, log=lambda *_: None)
     relay.receive(b"<14>hello", "192.0.2.9")
     with pytest.raises(TurnedOff):
         relay.flush_once()
@@ -128,12 +130,6 @@ def test_health(tmp_path):
     assert agent_mod.health(str(beat), out=lambda *_: None) == 0
     later = time.time() + agent_mod.HEALTHY_FOR + 5
     assert agent_mod.health(str(beat), now=later, out=lambda *_: None) == 1
-
-
-def test_relays_refuse_a_bad_port():
-    a = make(FakeHost())
-    assert agent_mod.start_syslog(a, "") is None
-    assert agent_mod.start_syslog(a, "not a port", out=lambda *_: None) is False
 
 
 def test_its_own_version():
@@ -364,21 +360,3 @@ def test_the_report_sums_busy_calls_and_failed_answers_over_methods():
     a.metrics.inc("floorbit_agent_answers_total", {"way": "failed"}, by=2)
     report = a.report()
     assert report["calls_busy"] == 4 and report["answers_failed"] == 2
-
-
-def test_a_syslog_batch_too_big_for_the_hosted_side_goes_in_halves():
-    # The hosted side refuses a body over its limit out loud (413). Sent again whole, the batch
-    # would block the backlog behind it for good.
-    class Small(FakeHost):
-        def post(self, url, data=None, headers=None, timeout=None):
-            super().post(url, data, headers, timeout)
-            lines = self.posts[-1][2]["lines"]
-            if any(len(line["raw"]) > 1000 for line in lines) or len(lines) > 4:
-                return Resp(413, {"error": "The agent sent more than 32 MB at once; send it in parts."})
-            return Resp(200, {"taken": len(lines)})
-    host = Small()
-    a = make(host)
-    lines = [{"raw": f"<14>line {i}", "from": "192.0.2.9"} for i in range(10)]
-    assert a.send_syslog(lines)["taken"] == 10
-    huge = [*lines[:3], {"raw": "<14>" + "x" * 2000, "from": "192.0.2.9"}]
-    assert a.send_syslog(huge)["taken"] == 3       # the one line still too big is skipped

@@ -308,7 +308,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "floorbit_agent_syslog_backlog{instance=~\"$instance\"}",
+          "expr": "sum by (instance) (floorbit_agent_plugin_waiting{plugin=\"syslog-relay\",instance=~\"$instance\"}) + sum by (instance) (floorbit_agent_plugin_backlog{plugin=\"syslog-relay\",instance=~\"$instance\"})",
           "legendFormat": "{{instance}}",
           "datasource": {
             "type": "prometheus",
@@ -626,7 +626,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(floorbit_agent_syslog_received_total{instance=~\"$instance\"}[$__rate_interval])",
+          "expr": "rate(floorbit_agent_plugin_received{plugin=\"syslog-relay\",instance=~\"$instance\"}[$__rate_interval])",
           "legendFormat": "received {{instance}}",
           "datasource": {
             "type": "prometheus",
@@ -635,8 +635,8 @@
         },
         {
           "refId": "B",
-          "expr": "rate(floorbit_agent_syslog_sent_total{instance=~\"$instance\"}[$__rate_interval])",
-          "legendFormat": "sent {{instance}}",
+          "expr": "rate(floorbit_agent_plugin_sent{plugin=\"syslog-relay\",instance=~\"$instance\"}[$__rate_interval])",
+          "legendFormat": "batches sent {{instance}}",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
@@ -644,7 +644,7 @@
         },
         {
           "refId": "C",
-          "expr": "rate(floorbit_agent_syslog_dropped_total{instance=~\"$instance\"}[$__rate_interval])",
+          "expr": "rate(floorbit_agent_plugin_dropped{plugin=\"syslog-relay\",instance=~\"$instance\"}[$__rate_interval])",
           "legendFormat": "dropped {{instance}}",
           "datasource": {
             "type": "prometheus",
@@ -682,7 +682,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(floorbit_agent_flows_packets_total{instance=~\"$instance\"}[$__rate_interval])",
+          "expr": "rate(floorbit_agent_plugin_packets{plugin=\"netflow-relay\",instance=~\"$instance\"}[$__rate_interval])",
           "legendFormat": "{{instance}}",
           "datasource": {
             "type": "prometheus",

@@ -1,24 +1,23 @@
 """The local agent for a hosted Floorbit (issue #2). See Floorbit's docs/agent.md.
 
-It runs on the event network, in the same image as Floorbit (``python -m floorbit_agent``), with the
-event's own monitoring plugin set up the usual way (``LIBRENMS_URL`` and ``LIBRENMS_TOKEN``, or any
-other monitoring plugin). It connects out to the hosted Floorbit (``FLOORBIT_URL``) with its key
+It runs on the event network, in the same image as Floorbit (``python -m floorbit_agent``). Its
+plugins (LibreNMS, NetBox, syslog, flows, ...) and their settings come from the hosted Floorbit
+(plugin_host.py), never from its own environment (env_settings.py). It connects out to the hosted
+Floorbit (``FLOORBIT_URL``) with its key
 (``FLOORBIT_AGENT_KEY``), takes calls, runs each one against the local plugin and sends the answer
 back. Calls come over a WebSocket link (protocol 2, ``wss://``) when the hosted Floorbit offers
 one, and over an HTTPS long poll when it doesn't or the link can't be opened. The hosted side is
 floorbit/agent_link.py in bitsandbricks-ch/floorbit.
 
-Nothing listens here unless asked: the agent makes outgoing HTTPS requests, and only with
-``FLOORBIT_AGENT_SYSLOG_PORT`` or ``FLOORBIT_AGENT_FLOWS_PORT`` does it take syslog or flows from
-the event network (syslog_relay.py, flows_relay.py), and only with ``FLOORBIT_AGENT_CAPTIVE`` does it
-answer the Captive Portal API (captive.py).
+Nothing listens here unless asked: the agent makes outgoing HTTPS requests, and only a plugin
+turned on in the hosted Floorbit takes syslog or flows from the event network or answers there
+(syslog_relay.py, flows_relay.py, captive.py, front_door.py, run by those plugins).
 When the hosted Floorbit can't be reached it waits and tries again, a little longer each time (up to ``MAX_BACKOFF``).
 """
 import contextlib
 import gzip
 import io
 import json
-import math
 import os
 import pathlib
 import signal
@@ -410,6 +409,15 @@ class Agent:
         self._running_lock = threading.Lock()
         self.metrics.collect(self._gauges)
         self.plugins = None       # plugin_host.PluginHost, once main() starts it
+        self.on_connect = []      # called after each hello that got through (env_settings.Sender)
+
+    def connected(self):
+        """Tell on_connect that a hello got through. One that fails must not drop the link."""
+        for fn in list(self.on_connect):
+            try:
+                fn(self)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f'[agent] after connecting: {type(exc).__name__}: {exc}')
 
     def _gauges(self, m):
         m.set('floorbit_agent_info', 1, {'version': self.version, 'protocol': self.protocol})
@@ -640,48 +648,12 @@ class Agent:
             self.metrics.inc('floorbit_agent_answers_total', {'way': 'failed'})
             self.log(f'[agent] could not send the answer to {call["method"]}: {exc}')
 
-    def send_syslog(self, lines, dropped=0):
-        """One batch for the hosted syslog (syslog_relay.Relay calls this)."""
-        from .syslog_relay import TurnedOff
-        resp = self._post('/api/agent/v1/syslog', {'lines': lines, 'dropped': dropped})
-        if resp.status_code == 409:
-            raise TurnedOff(_error_of(resp) or 'Syslog is turned off on the hosted Floorbit.')
-        if resp.status_code == 413:
-            # Too big for the hosted side: halves, so one batch of huge lines can't block the
-            # backlog behind it for good. A single line that's still too big is skipped and said.
-            if len(lines) > 1:
-                half = len(lines) // 2
-                first = self.send_syslog(lines[:half], dropped) or {}
-                second = self.send_syslog(lines[half:]) or {}
-                return {'taken': (first.get('taken') or 0) + (second.get('taken') or 0)}
-            self.log('[agent] skipped a syslog line the hosted Floorbit refused as too big')
-            return {'taken': 0}
-        return self._check(resp)
-
-    def _said(self, resp):
-        """409: the hosted side has the feature off, and says so."""
-        if resp.status_code == 409:
-            raise RuntimeError(_error_of(resp) or 'turned off on the hosted Floorbit')
-        return self._check(resp)
-
-    def flow_seats(self):
-        return self._said(self.http.get(f'{self.url}/api/agent/v1/seats', headers=self._headers(),
-                                        timeout=HTTP_TIMEOUT))
-
-    def captive_state(self):
-        """Which client IPs are done, for the Captive Portal API (captive.py). RuntimeError: check-in is off."""
-        return self._said(self.http.get(f'{self.url}/api/agent/v1/captive', headers=self._headers(),
-                                        timeout=HTTP_TIMEOUT))
-
     def seat_walk_hello(self, token, ip):
         """The crew laptop with this walk-through code is at ``ip`` (captive.py's hello)."""
         resp = self._post('/api/agent/v1/seat-walk', {'token': token, 'ip': ip})
         if resp.status_code == 404:
             raise RuntimeError(_error_of(resp) or 'this Floorbit has no seat walk-through')
         return self._check(resp)
-
-    def send_flows(self, snapshot):
-        return self._said(self._post('/api/agent/v1/flows', {'snapshot': snapshot}))
 
     def beat(self, now=None):
         """The hosted Floorbit answered: say so in the heartbeat file (at most every few seconds)."""
@@ -749,6 +721,7 @@ class Agent:
                              f'(Floorbit {hello.get("server_version")})')
                     connected, backoff = True, 1
                     self.metrics.set('floorbit_agent_connected', 1)
+                    self.connected()
                 if self.link_path and time.monotonic() >= self.link_after and self._try_link():
                     connected = False     # it dropped: say hello again, then link or poll
                     continue
@@ -767,21 +740,6 @@ class Agent:
                 connected = False
                 self._stop.wait(backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF)
-
-
-def turn_on(app, names, out=print):
-    """FLOORBIT_AGENT_PLUGINS=http-check,pihole: plugins the agent turns on at start, whatever the
-    hosted Floorbit says. Otherwise the hosted Floorbit's plugin settings decide (LocalPlugins in
-    plugin_host.py); FLOORBIT_PLUGIN_<ID>_<KEY> variables still win over its settings."""
-    from floorbit import sources
-    from floorbit.plugins.base import PluginError
-    registry = sources.registry
-    for name in [n.strip() for n in str(names or '').split(',') if n.strip()]:
-        try:
-            with app.app_context():
-                registry.set_enabled(name, True)
-        except (KeyError, PluginError) as exc:   # an unknown id, or a plugin with an error
-            out(f'[agent] cannot turn on the plugin "{name}": {exc}')
 
 
 def check(agent, execute, out=print):
@@ -807,21 +765,17 @@ def check(agent, execute, out=print):
         devices = execute('devices', [])
         line(True, f'the monitoring plugin answers: {len(devices or [])} devices')
     except Exception as exc:  # noqa: BLE001
-        hint = '' if os.environ.get('LIBRENMS_URL') else ' (LIBRENMS_URL and LIBRENMS_TOKEN are not set)'
-        line(False, f'the monitoring plugin: {exc}{hint}')
+        line(False, f'the monitoring plugin: {exc} (set it up in Settings > Plugins on the hosted Floorbit)')
     try:
         feeds = execute('inventory_feeds', [])
     except Exception as exc:  # noqa: BLE001
         feeds = []
         line(False, f'the inventory plugins: {exc}')
     if not feeds:
-        out('-    no inventory plugin is on (NETBOX_URL and NETBOX_TOKEN): the hosted inventory is kept by hand')
+        out('-    no inventory plugin is on in the hosted Floorbit: its inventory is kept by hand')
     for feed in feeds:
         if 'error' in feed:
-            # The plugin's own message points at the settings page, which the agent doesn't have.
-            hint = ' (NETBOX_URL and NETBOX_TOKEN are not set)' if (
-                feed['plugin'] == 'netbox' and not os.environ.get('NETBOX_URL')) else ''
-            line(False, f"{feed['name']}: {feed['error']}{hint}")
+            line(False, f"{feed['name']}: {feed['error']}")
         else:
             line(True, f"{feed['name']} answers: {len(feed['items'])} devices")
     try:
@@ -832,144 +786,8 @@ def check(agent, execute, out=print):
                 line(True, f"{feed['name']} answers: {len(feed['items'])} health checks")
     except Exception as exc:  # noqa: BLE001
         line(False, f'the health plugins: {exc}')
-    if os.environ.get('FLOORBIT_AGENT_SYSLOG_PORT'):
-        try:
-            agent.send_syslog([])
-            line(True, f'the hosted Floorbit takes syslog (the agent will listen on UDP '
-                       f'{os.environ["FLOORBIT_AGENT_SYSLOG_PORT"]})')
-        except Exception as exc:  # noqa: BLE001
-            line(False, f'syslog: {exc}')
-    if os.environ.get('FLOORBIT_AGENT_FLOWS_PORT'):
-        try:
-            seats = agent.flow_seats().get('seat_of') or {}
-            line(True, f'the hosted Floorbit takes flows and knows {len(seats)} seat addresses (the agent will '
-                       f'listen on UDP {os.environ["FLOORBIT_AGENT_FLOWS_PORT"]})')
-        except Exception as exc:  # noqa: BLE001
-            line(False, f'flows: {exc}')
     out('All good: start the agent without "check".' if ok else 'Fix what failed, then run the check again.')
     return ok
-
-
-def start_syslog(agent, port, out=print):
-    """The syslog relay, when FLOORBIT_AGENT_SYSLOG_PORT is set: the Relay, None when it isn't set,
-    False when it can't start (a wrong port number, or one in use)."""
-    from .syslog_relay import Relay
-    port = str(port or '').strip()
-    if not port:
-        return None
-    try:
-        relay = Relay(agent.send_syslog, int(port), os.environ.get('FLOORBIT_AGENT_SYSLOG_BIND') or '0.0.0.0', log=out,
-                      spool=open_buffer('syslog', os.environ, out))
-        relay.start()
-    except (ValueError, OSError, OverflowError) as exc:
-        out(f'[agent] cannot listen for syslog on "{port}": {exc}')
-        return False
-    return relay
-
-
-def open_buffer(kind, env, out=print):
-    """The disk buffer for one kind of data (spool.py), in the state volume next to the agent's
-    settings: FLOORBIT_AGENT_BUFFER_DIR, _MAX_MB (2048) and _MAX_HOURS (24); _MAX_MB=0 turns it
-    off. None when it is off or its folder can't be made (the relay then keeps lines in memory)."""
-    from .spool import Spool
-    try:
-        max_mb = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_MB') or 2048)
-        max_hours = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_HOURS') or 24)
-    except ValueError:
-        max_mb = max_hours = math.nan
-    # "inf" or "nan" passed float() and then broke int() below, which took the syslog relay down
-    # with it; no hours or fewer would drop every record the moment it is written.
-    if not (math.isfinite(max_mb) and math.isfinite(max_hours) and max_hours > 0):
-        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers (hours above 0); no disk buffer')
-        return None
-    if max_mb <= 0:
-        return None
-    base = env.get('FLOORBIT_AGENT_BUFFER_DIR') or os.path.join(
-        os.path.dirname(os.path.abspath(env.get('FLOORBIT_DATA_FILE') or 'agent-data.json')), 'buffer')
-    try:
-        spool = Spool(os.path.join(base, kind), max_bytes=int(max_mb * 1024 ** 2), max_age=max_hours * 3600, log=out)
-    except OSError as exc:
-        out(f'[agent] no disk buffer for {kind} in {base}: {exc}')
-        return None
-    if len(spool):
-        out(f'[agent] {len(spool)} {kind} records in the disk buffer from before: sending them once the '
-            'hosted Floorbit takes them')
-    return spool
-
-
-def start_flows(agent, port, out=print):
-    """The flow collector, when FLOORBIT_AGENT_FLOWS_PORT is set; as start_syslog."""
-    from .flows_relay import FlowsRelay
-    port = str(port or '').strip()
-    if not port:
-        return None
-    try:
-        relay = FlowsRelay(agent, int(port), os.environ.get('FLOORBIT_AGENT_FLOWS_BIND') or '0.0.0.0', log=out)
-        relay.start()
-    except (ValueError, OSError, OverflowError) as exc:
-        out(f'[agent] cannot listen for flows on "{port}": {exc}')
-        return False
-    return relay
-
-
-def start_captive(agent, env, out=print):
-    """The Captive Portal API, when FLOORBIT_AGENT_CAPTIVE is set; as start_syslog."""
-    from . import captive
-    address = env.get('FLOORBIT_AGENT_CAPTIVE', '').strip()
-    if not address or address.lower() == 'off':
-        return None
-    api = captive.Captive(agent.captive_state, env.get('FLOORBIT_AGENT_CAPTIVE_PORTAL_URL', ''),
-                          [p for p in env.get('FLOORBIT_AGENT_CAPTIVE_PROXIES', '').split(',') if p.strip()], log=out,
-                          say_hello=agent.seat_walk_hello, floorbit_url=agent.url)
-    try:
-        server = captive.serve(api, address, log=out)
-    except (ValueError, OSError, OverflowError) as exc:
-        out(f'[captive] cannot answer on "{address}" (host:port): {exc}')
-        return False
-    return _Served(server, api)
-
-
-def start_front_door(agent, env, out=print):
-    """The attendee front door (front_door.py), when FLOORBIT_AGENT_FRONT_DOOR is set; as start_syslog."""
-    from . import front_door
-    address = env.get('FLOORBIT_AGENT_FRONT_DOOR', '').strip()
-    if not address or address.lower() == 'off':
-        return None
-    door = front_door.FrontDoor(agent.url, agent.key, proxies=[
-        p for p in env.get('FLOORBIT_AGENT_FRONT_DOOR_PROXIES', '').split(',') if p.strip()], log=out)
-    try:
-        context = front_door.tls_context(env)
-        server = front_door.serve(door, address, context)
-    except (ValueError, OSError, OverflowError) as exc:
-        out(f'[front door] cannot answer on "{address}" (host:port, and the TLS certificate if set): {exc}')
-        return False
-
-    def numbers(m):
-        for outcome, n in dict(door.counts).items():
-            m.set('floorbit_agent_front_door_requests_total', n, {'outcome': outcome})
-        m.set('floorbit_agent_front_door_open', door.open)
-    agent.metrics.collect(numbers)
-    out(f'[front door] serving the hosted Floorbit\'s pages on {"https" if context else "http"}://{address}')
-    return _Server(server)
-
-
-class _Server:
-    def __init__(self, server):
-        self.server = server
-
-    def stop(self):
-        self.server.shutdown()
-
-
-class _Served:
-    """A server and its refresh, stopped together."""
-
-    def __init__(self, server, api):
-        self.server, self.api = server, api
-
-    def stop(self):
-        self.api.stop()
-        self.server.shutdown()
 
 
 def start_vrrp(agent, env, out=print):
@@ -1003,7 +821,7 @@ def start_plugins(agent, app):
 
     from .plugin_host import LocalPlugins, PluginHost, agent_specs
     root = state_root()
-    local = LocalPlugins(app, sources.registry, root, pinned=os.environ.get('FLOORBIT_AGENT_PLUGINS', '').split(','))
+    local = LocalPlugins(app, sources.registry, root)
     host = PluginHost(agent, agent_specs(sources.registry), root, local=local)
     from .bundles import Updater
     host.updater = Updater(agent, sources.registry, root, floorbit_version(app), log=print)
@@ -1119,43 +937,45 @@ def main(argv=None):
     # would only mislead whoever reads its log.
     with contextlib.redirect_stdout(io.StringIO()):
         app = create_app(start_background=False)
-    turn_on(app, os.environ.get('FLOORBIT_AGENT_PLUGINS', ''))
+    from floorbit import sources
+
+    from . import env_settings
+    # Plugins and their settings come from the hosted Floorbit only; what the environment still
+    # says is handed over once (env_settings.py).
+    handover = env_settings.Sender(sources.registry, state_root())
+    env_settings.ignore(sources.registry)
     version = agent_version()
     plugins_ref = {}
     agent = Agent(url, key, local_executor(app, plugins_ref), version=version)
     agent.heartbeat = heartbeat_file()
+    agent.on_connect.append(handover.send)
     host = plugins_ref['host'] = start_plugins(agent, app)
     if argv and argv[0] == 'check':
-        good = check(agent, agent.execute)
+        if handover.names:
+            print(f'-    no longer read here, set up in Settings > Plugins instead: {", ".join(handover.names)}')
+        good = True
         try:
-            host.pull()
+            host.pull()           # first: the monitoring and inventory plugins come with it
         except Exception as exc:  # noqa: BLE001
             print(f'  ✗ the plugin settings from the hosted Floorbit: {exc}')
             good = False
+        good = check(agent, agent.execute) and good
         good = host.check() and good
         host.stop()
         return 0 if good else 1
-    relays = [start_syslog(agent, os.environ.get('FLOORBIT_AGENT_SYSLOG_PORT', '')),
-              start_flows(agent, os.environ.get('FLOORBIT_AGENT_FLOWS_PORT', '')),
-              start_captive(agent, os.environ), start_front_door(agent, os.environ)]
     from . import metrics as agent_metrics
-    agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None,
-                                                        relays[2].api if relays[2] else None))
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
                                          HEALTHY_FOR, os.environ.get('FLOORBIT_AGENT_METRICS_TOKEN') or None)
     keepalived = start_vrrp(agent, os.environ)
     host.vrrp = keepalived or None
     agent.metrics.collect(host.collect)
     host.start()
-    if False in relays or keepalived is False:
+    if keepalived is False:
         host.stop()
-        for relay in relays:
-            if relay:
-                relay.stop()
         if metrics_server:
             metrics_server.shutdown()
         return 2
-    # docker stop sends SIGTERM: leave the way Ctrl+C does, so the syslog backlog goes out first.
+    # docker stop sends SIGTERM: leave the way Ctrl+C does, so the plugins stop cleanly.
     signal.signal(signal.SIGTERM, _stop_on_term)
     try:
         agent.run()
@@ -1169,9 +989,6 @@ def main(argv=None):
         host.stop()
         if keepalived:
             keepalived.stop()
-        for relay in relays:
-            if relay:
-                relay.stop()
         if metrics_server:
             metrics_server.shutdown()
     return 0

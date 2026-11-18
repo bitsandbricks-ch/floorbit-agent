@@ -171,34 +171,6 @@ class _Timer:
         return False
 
 
-def relay_collector(syslog=None, flows=None, captive=None):
-    """Gauges and counters from the relays' own numbers (they count for themselves)."""
-    def collect(m):
-        if captive:
-            for answer, n in dict(captive.asked).items():
-                m.set('floorbit_agent_captive_answers_total', n, {'answer': answer})
-            m.set('floorbit_agent_captive_checked_in', len(captive.done))
-            if captive.asked_at:
-                m.set('floorbit_agent_captive_list_age_seconds', round(max(0.0, time.time() - captive.asked_at), 1))
-            m.set('floorbit_agent_captive_failing', int(bool(captive.error)))
-        if syslog:
-            m.set('floorbit_agent_syslog_received_total', getattr(syslog, 'received', 0))
-            m.set('floorbit_agent_syslog_sent_total', syslog.sent)
-            m.set('floorbit_agent_syslog_dropped_total', getattr(syslog, 'all_dropped', syslog.dropped))
-            spool = getattr(syslog, 'spool', None)
-            if spool is not None:
-                m.set('floorbit_agent_buffer_records', len(spool), {'kind': 'syslog'})
-                m.set('floorbit_agent_buffer_bytes', spool.size, {'kind': 'syslog'})
-                m.set('floorbit_agent_syslog_replayed_total', syslog.replayed)
-            m.set('floorbit_agent_syslog_backlog', len(syslog.lines) + getattr(syslog, 'buffered', 0))
-            m.set('floorbit_agent_syslog_failing', int(bool(syslog._failing)))
-        if flows:
-            m.set('floorbit_agent_flows_packets_total', getattr(flows, 'packets', 0))
-            m.set('floorbit_agent_flows_snapshots_sent_total', flows.sent)
-            m.set('floorbit_agent_flows_failing', int(bool(flows._failing)))
-    return collect
-
-
 def health_of(agent, healthy_for, now=None):
     """(ok, details) for /healthz: has the hosted Floorbit answered lately?"""
     now = time.time() if now is None else now

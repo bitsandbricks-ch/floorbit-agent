@@ -78,7 +78,11 @@ def test_a_shut_port_is_disabled(fb, lab):
 
 def test_a_player_checks_in_and_the_seat_learns_its_port(fb, lab):
     seat = lab.seat('A-7')
-    r = requests.post(f'{fb.url}/api/checkin', json={'seat': seat.label, 'username': seat.nick},
+    # Through an agent's front door, as from the seat's PC: Floorbit takes the address only from there.
+    door = os.environ.get('LAB_FRONT_DOOR', '').rstrip('/')
+    if not door:
+        pytest.skip('LAB_FRONT_DOOR is not set')
+    r = requests.post(f'{door}/api/checkin', json={'seat': seat.label, 'username': seat.nick},
                       headers={'X-Forwarded-For': seat.ip}, timeout=30)
     assert r.status_code == 200, r.text
     assert r.json()['seat'] == seat.label
@@ -198,7 +202,8 @@ def test_agent_metrics_count_what_came_in(lab):
     for item in [s for s in spec.split(',') if s]:
         name, _, url = item.partition('=')
         text = requests.get(f'{url}/metrics', timeout=10).text
-        received = [line for line in text.splitlines() if line.startswith('floorbit_agent_syslog_received_total')]
+        received = [line for line in text.splitlines()
+                    if line.startswith('floorbit_agent_plugin_received{') and 'plugin="syslog-relay"' in line]
         assert received and float(received[0].split()[-1]) > 0, f'{name} received no syslog'
 
 
