@@ -18,6 +18,7 @@ import contextlib
 import gzip
 import io
 import json
+import math
 import os
 import pathlib
 import signal
@@ -29,6 +30,8 @@ from concurrent.futures import ThreadPoolExecutor
 KEY_HEADER = 'Floorbit-Agent-Key'
 VERSION_HEADER = 'Floorbit-Agent-Version'
 PROTOCOL_HEADER = 'Floorbit-Agent-Protocol'
+# Our clock on every request: the hosted side puts our times right when this box has no NTP.
+CLOCK_HEADER = 'Floorbit-Agent-Clock'
 PROTOCOL = 2              # the newest agent protocol this agent speaks; the hosted side says which it does
 LINK_IDLE = 60            # the hosted side sends something at least every 20 s: quiet this long, it's gone
 LINK_RETRY = 300          # after the link failed, long-poll this long before trying it again
@@ -88,6 +91,15 @@ def _within(seconds, open_it, late=None):
     if 'error' in out:
         raise out['error']
     return out['value']
+
+
+def _error_of(resp):
+    """The ``error`` of a JSON answer, or None when it is not JSON (a proxy's own page)."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    return body.get('error') if isinstance(body, dict) else None
 
 
 class Refused(RuntimeError):
@@ -352,6 +364,17 @@ def _feeds(registry, specs, method):
     return out
 
 
+def _no_redirects(requests):
+    """A session that never follows a redirect. The key goes in our own header, and requests only
+    drops ``Authorization`` on a redirect to another host: a hosted side (or whatever answers in
+    its name) that redirects would get the key sent on, even to plain http."""
+    class Session(requests.Session):
+        def request(self, method, url, **kwargs):
+            kwargs['allow_redirects'] = False
+            return super().request(method, url, **kwargs)
+    return Session()
+
+
 class Agent:
     def __init__(self, url, key, execute, http=None, version='0', log=print):
         import requests
@@ -359,7 +382,7 @@ class Agent:
         self.lan_url = os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
         self.key = key
         self.execute = execute
-        self.http = http or requests.Session()
+        self.http = http or _no_redirects(requests)
         self.version = version
         self.log = log
         self._pools = {}          # method -> its own ThreadPoolExecutor
@@ -396,7 +419,8 @@ class Agent:
             m.set('floorbit_agent_last_contact_age_seconds', round(time.time() - self.last_contact, 1))
 
     def _headers(self, json_body=False):
-        h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(self.protocol)}
+        h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(self.protocol),
+             CLOCK_HEADER: f'{time.time():.3f}'}
         if json_body:
             h['Content-Type'] = 'application/json'
         return h
@@ -407,7 +431,12 @@ class Agent:
                           'Enrol the agent again.')
         if resp.status_code == 426:
             # Retrying won't help: one of the two has to be updated.
-            raise Refused((resp.json() or {}).get('error') or 'The hosted Floorbit speaks another agent protocol.')
+            raise Refused(_error_of(resp) or 'The hosted Floorbit speaks another agent protocol.')
+        if 300 <= resp.status_code < 400:
+            where = resp.headers.get('Location') or 'somewhere else'
+            # Not Refused: a maintenance page may redirect for a while, so keep trying.
+            raise RuntimeError(f'The hosted Floorbit redirects to {where}. The agent does not follow redirects, '
+                          'its key would go along: set FLOORBIT_URL to the address the hosted Floorbit has now.')
         resp.raise_for_status()
         return resp.json()
 
@@ -457,6 +486,8 @@ class Agent:
                 self.beat()
                 self.last_contact = time.time()
                 message = json.loads(raw)
+                if not isinstance(message, dict):
+                    continue          # nothing a Floorbit sends: not worth dropping the link for
                 if message.get('type') == 'calls':
                     for call in message.get('calls') or []:
                         self.take(call)
@@ -549,6 +580,11 @@ class Agent:
 
     def take(self, call):
         """Queue one call in its method's pool, or answer "busy" when too many of that kind wait."""
+        if not isinstance(call, dict) or not isinstance(call.get('id'), (str, int)):
+            # No id: nothing to answer to. Skipped here, one odd call doesn't end the poll or the link.
+            self.metrics.inc('floorbit_agent_calls_total', {'method': 'other', 'outcome': 'unreadable'})
+            self.log(f'[agent] skipped a call it cannot read: {str(call)[:120]!r}')
+            return
         method = call.get('method') if call.get('method') in METHODS else 'other'
         with self._running_lock:
             if self._waiting.get(method, 0) >= MAX_WAITING:
@@ -609,7 +645,7 @@ class Agent:
         from .syslog_relay import TurnedOff
         resp = self._post('/api/agent/v1/syslog', {'lines': lines, 'dropped': dropped})
         if resp.status_code == 409:
-            raise TurnedOff((resp.json() or {}).get('error') or 'Syslog is turned off on the hosted Floorbit.')
+            raise TurnedOff(_error_of(resp) or 'Syslog is turned off on the hosted Floorbit.')
         if resp.status_code == 413:
             # Too big for the hosted side: halves, so one batch of huge lines can't block the
             # backlog behind it for good. A single line that's still too big is skipped and said.
@@ -625,7 +661,7 @@ class Agent:
     def _said(self, resp):
         """409: the hosted side has the feature off, and says so."""
         if resp.status_code == 409:
-            raise RuntimeError((resp.json() or {}).get('error') or 'turned off on the hosted Floorbit')
+            raise RuntimeError(_error_of(resp) or 'turned off on the hosted Floorbit')
         return self._check(resp)
 
     def flow_seats(self):
@@ -641,7 +677,7 @@ class Agent:
         """The crew laptop with this walk-through code is at ``ip`` (captive.py's hello)."""
         resp = self._post('/api/agent/v1/seat-walk', {'token': token, 'ip': ip})
         if resp.status_code == 404:
-            raise RuntimeError((resp.json() or {}).get('error') or 'this Floorbit has no seat walk-through')
+            raise RuntimeError(_error_of(resp) or 'this Floorbit has no seat walk-through')
         return self._check(resp)
 
     def send_flows(self, snapshot):
@@ -840,7 +876,11 @@ def open_buffer(kind, env, out=print):
         max_mb = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_MB') or 2048)
         max_hours = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_HOURS') or 24)
     except ValueError:
-        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers; no disk buffer')
+        max_mb = max_hours = math.nan
+    # "inf" or "nan" passed float() and then broke int() below, which took the syslog relay down
+    # with it; no hours or fewer would drop every record the moment it is written.
+    if not (math.isfinite(max_mb) and math.isfinite(max_hours) and max_hours > 0):
+        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers (hours above 0); no disk buffer')
         return None
     if max_mb <= 0:
         return None

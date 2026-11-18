@@ -32,6 +32,9 @@ UDP and sends them on, the flows only as a summary.
   `FLOORBIT_AGENT_INSECURE=1`, and checks the hosted side's TLS certificate (requests' default,
   never turned off). Without the hosted side's certificate key, no call reaches the agent.
 - **Read or change data on the way:** TLS for the long poll and the WebSocket link (`wss://`).
+- **Catch the key with a redirect:** the agent follows no redirect. The key goes in its own header,
+  which requests (unlike `Authorization`) keeps on a redirect to another host, even to `http://`. A
+  redirect is reported with where it points, and the agent tries again later.
 
 ### Someone who controls the hosted Floorbit (or steals its database)
 
@@ -56,6 +59,10 @@ UDP and sends them on, the flows only as a summary.
   written to the agent's disk. Host keys are pinned on the hosted side and checked here; a changed
   key stops the call before anything is sent. At most `MAX_SHELLS` (10) shells are open, and one
   nobody reads for 90 seconds is closed.
+- **Offer a plugin update that writes elsewhere:** a bundle runs only when its signature verifies
+  against a key built into the image. Before that, its id and version name folders under the
+  agent's state, so an offer whose id or version could be a path (`/some/dir`, `9/../../x`) is
+  ignored, and an offer the agent can't read waits instead of stopping the plugins' settings.
 - **Flood the agent:** at most `WORKERS` calls of one kind run at a time (more for switch calls and
   terminals, `POOL_SIZES`), and at most `MAX_WAITING`
   wait. Anything more gets a "busy" answer at once, so memory can't grow without end and one slow
@@ -88,9 +95,17 @@ UDP and sends them on, the flows only as a summary.
   crew got from a signed-in Floorbit page in the last ten minutes, the hosted side refuses it. A code
   is used once. With a stolen code an attendee could only make that walk-through step find their own
   seat's port, which the crew sees on the page. The redirect back goes only to the `FLOORBIT_URL`
-  origin, so the endpoint is no open redirect, and its page escapes everything it shows.
+  origin, so the endpoint is no open redirect, and its page escapes everything it shows. Each hello
+  is a request to the hosted Floorbit, so one address gets 10 a minute; the rest are answered 429
+  without asking Floorbit.
 - **Flood the UDP ports:** the syslog backlog has a fixed size, the newest lines are dropped and
   counted (`floorbit_agent_syslog_dropped_total`), and memory stays bounded.
+- **Send broken or crafted flow packets:** a packet the collector can't read is skipped and counted;
+  the listener keeps running. Templates are capped, so made-up ones can't fill memory.
+- **Hold connections open** on the captive or metrics port: a connection that sends nothing for 10
+  seconds is closed, one address gets at most 16 at a time and the port 256, and the rest are closed
+  at once. Loopback is never refused, so keepalived's `/healthz` keeps answering during a flood. A
+  flood can make the captive note late for others; it can't take the agent down.
 - **Read the report:** the half-minute report to the hosted Floorbit carries the same kind of counts
   as `/metrics`, nothing more.
 - **Read `/metrics`:** it is only counts and timings, with no IPs, names, log lines or keys. When

@@ -56,6 +56,14 @@ def test_it_says_who_it_is_and_which_protocol():
     assert host.last_headers["Floorbit-Agent-Key"] == "fba_x_y"
 
 
+def test_every_request_says_the_agents_clock():
+    """The hosted side puts our syslog times right with it when this box has no NTP."""
+    import time
+    host = FakeHost()
+    make(host).hello()
+    assert abs(float(host.last_headers["Floorbit-Agent-Clock"]) - time.time()) < 5
+
+
 def test_gzip_only_after_hello_says_so():
     host = FakeHost()
     a = make(host)

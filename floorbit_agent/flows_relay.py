@@ -27,6 +27,7 @@ class FlowsRelay:
         self.collector.publish = self._publish
         self.sent = 0
         self.packets = 0
+        self.dropped = 0
         self._failing = False
         self._stop = threading.Event()
         self._sock = None
@@ -66,6 +67,10 @@ class FlowsRelay:
                 if self._stop.is_set():
                     return
                 raise
+            except Exception as exc:  # noqa: BLE001  # anyone can send here: one packet must not end the thread
+                self.dropped += 1
+                if self.dropped <= 5 or self.dropped % 1000 == 0:
+                    self.log(f'[agent] skipped a flow packet the collector could not read: {exc!r}'[:300])
 
     def _ticking(self):
         # Apart from the reading: writing raw flows and sending the summary held the socket
@@ -73,8 +78,8 @@ class FlowsRelay:
         while not self._stop.wait(1):
             try:
                 self.tick()
-            except Exception as exc:  # noqa: BLE001  # the next tick tries again
-                self.log(f'[agent] flows housekeeping failed: {exc}')
+            except Exception as exc:  # noqa: BLE001  # a chore that fails now is tried again next round
+                self.log(f'[agent] flow housekeeping failed: {exc!r}'[:300])
 
     def start(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

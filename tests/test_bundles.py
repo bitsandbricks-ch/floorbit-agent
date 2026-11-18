@@ -303,3 +303,36 @@ def test_the_cli_says_how_to_use_it(tmp_path):
     assert cli(["approve", "nothing"], str(tmp_path), out=out.append) == 1
     assert cli([], str(tmp_path), out=out.append) == 0 and out[-1] == "No plugin updates yet."
     assert json.loads(json.dumps(out))
+
+
+def test_an_offer_whose_id_or_version_is_a_path_touches_nothing_outside(tmp_path):
+    """The hosted side isn't trusted with code, nor with paths: before, an id like /some/dir or a
+    version like 9/../../x put the download's scratch folder there, and a failed download removed it."""
+    class Answer:
+        status_code, content = 404, b""
+
+    class Http:
+        def get(self, *a, **kw):
+            return Answer()
+
+    class Stub:
+        url, http = "https://floor.example.com", Http()
+
+        def _headers(self):
+            return {}
+
+    victim = tmp_path / "victim"
+    (victim / ".9.new").mkdir(parents=True)
+    (tmp_path / "x9.new").mkdir()
+    lines = []
+    up = Updater(Stub(), None, str(tmp_path / "state"), "0.4.0", env={}, keys={"k": "v"}, log=lines.append)
+    (tmp_path / "state" / "bundles" / "hallthing").mkdir()
+    up.offer(None, {str(victim): {"version": "9", "file": "a", "sha256": "b"},
+                    "hallthing": {"version": "/../../../x9", "file": "a", "sha256": "b"},
+                    "../../../victim": {"version": "9", "file": "a", "sha256": "b"}})
+    assert (victim / ".9.new").is_dir() and (tmp_path / "x9.new").is_dir()
+    assert not any("refused" in str(e) for e in up.events)
+    # An agent_api that isn't a number waits like a newer one, instead of raising out of the pull.
+    for odd in ("x", [2], float("inf")):
+        up.offer(None, {"hallthing": {"version": "9", "file": "a", "sha256": "b", "agent_api": odd}})
+        assert up.report()["plugins"]["hallthing"]["pending"]["why"] == "needs a newer agent image"
