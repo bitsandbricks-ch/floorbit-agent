@@ -320,6 +320,17 @@ def _feeds(registry, specs, method):
     return out
 
 
+def _no_redirects(requests):
+    """A session that never follows a redirect. The key goes in our own header, and requests only
+    drops ``Authorization`` on a redirect to another host: a hosted side (or whatever answers in
+    its name) that redirects would get the key sent on, even to plain http."""
+    class Session(requests.Session):
+        def request(self, method, url, **kwargs):
+            kwargs['allow_redirects'] = False
+            return super().request(method, url, **kwargs)
+    return Session()
+
+
 class Agent:
     def __init__(self, url, key, execute, http=None, version='0', log=print):
         import requests
@@ -327,7 +338,7 @@ class Agent:
         self.lan_url = os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
         self.key = key
         self.execute = execute
-        self.http = http or requests.Session()
+        self.http = http or _no_redirects(requests)
         self.version = version
         self.log = log
         self._pools = {}          # method -> its own ThreadPoolExecutor
@@ -377,6 +388,11 @@ class Agent:
         if resp.status_code == 426:
             # Retrying won't help: one of the two has to be updated.
             raise Refused(_error_of(resp) or 'The hosted Floorbit speaks another agent protocol.')
+        if 300 <= resp.status_code < 400:
+            where = resp.headers.get('Location') or 'somewhere else'
+            # Not Refused: a maintenance page may redirect for a while, so keep trying.
+            raise RuntimeError(f'The hosted Floorbit redirects to {where}. The agent does not follow redirects, '
+                          'its key would go along: set FLOORBIT_URL to the address the hosted Floorbit has now.')
         resp.raise_for_status()
         return resp.json()
 

@@ -32,6 +32,9 @@ UDP and sends them on, the flows only as a summary.
   `FLOORBIT_AGENT_INSECURE=1`, and checks the hosted side's TLS certificate (requests' default,
   never turned off). Without the hosted side's certificate key, no call reaches the agent.
 - **Read or change data on the way:** TLS for the long poll and the WebSocket link (`wss://`).
+- **Catch the key with a redirect:** the agent follows no redirect. The key goes in its own header,
+  which requests (unlike `Authorization`) keeps on a redirect to another host, even to `http://`. A
+  redirect is reported with where it points, and the agent tries again later.
 
 ### Someone who controls the hosted Floorbit (or steals its database)
 

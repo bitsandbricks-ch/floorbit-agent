@@ -48,6 +48,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Security
 
+- The agent no longer follows redirects from the hosted Floorbit. Its key travels in its own header, which a redirect to another host (even plain http) took along. A redirect now says where it points, and the agent keeps trying.
 - A laptop on the hall network could make the agent send seat walk-through hellos to the hosted Floorbit as fast as it answered. One address now gets 10 hellos a minute; the rest get a 429 page without reaching Floorbit.
 - Game server queries no longer go to link-local addresses (`169.254.169.254`, where clouds keep their metadata service): Python counts them as private, so they passed the private-only check.
 - Game queries and service probes check an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it reaches, also on Python releases that don't do so themselves.

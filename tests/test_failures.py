@@ -247,3 +247,41 @@ def test_a_426_from_a_proxy_page_still_stops_the_agent():
     with pytest.raises(agent_mod.Refused, match="another agent protocol"):
         agent_mod.Agent("https://floor.example.com", "fba_x_y", lambda m, a: [], http=Host(),
                         log=lambda *_: None).hello()
+
+
+def test_a_redirect_is_not_followed_so_the_key_stays_home():
+    """requests drops only Authorization on a redirect to another host: our key header went along,
+    even from https to plain http. Now no redirect is followed, and the agent says why."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    seen = []
+
+    class Elsewhere(BaseHTTPRequestHandler):
+        def do_GET(self):  # the name http.server asks for
+            seen.append(self.headers.get(agent_mod.KEY_HEADER))
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(b'{"name": "x"}')
+
+        def log_message(self, *args):
+            pass
+
+    class Redirecting(Elsewhere):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header('Location', f'http://127.0.0.1:{other.server_port}{self.path}')
+            self.end_headers()
+
+    other, hosted = HTTPServer(('127.0.0.1', 0), Elsewhere), HTTPServer(('127.0.0.1', 0), Redirecting)
+    for server in (other, hosted):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        a = agent_mod.Agent(f'http://127.0.0.1:{hosted.server_port}', 'fbak_example-key', execute=lambda *x: None)
+        with pytest.raises(RuntimeError, match=r'redirects to http://127\.0\.0\.1') as err:
+            a.hello()
+        assert not isinstance(err.value, agent_mod.Refused)      # a maintenance redirect passes: keep trying
+        assert seen == []
+    finally:
+        for server in (other, hosted):
+            server.shutdown()
+            server.server_close()
