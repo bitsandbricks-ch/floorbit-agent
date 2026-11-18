@@ -39,6 +39,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- `FLOORBIT_AGENT_BUFFER_MAX_MB=inf` (or `nan`, or `_MAX_HOURS` of 0) no longer stops the syslog relay from starting: the disk buffer is turned off with a clear message, and syslog runs with its lines kept in memory.
 - A call from the hosted Floorbit that the agent can't read (not an object, no id) is skipped and counted (`outcome="unreadable"`) instead of ending the long poll or the WebSocket link, which dropped the good calls behind it. A 426 whose body isn't JSON, such as a proxy's own page, now stops the agent with the protocol message instead of retrying forever.
 - The captive page and the metrics port no longer keep a thread per connection for ever: a connection that sends nothing for 10 seconds is closed, one address holds at most 16 at a time and the port 256 (loopback, where keepalived asks `/healthz`, is never refused). Before, one laptop in the hall could open thousands of idle connections and hold a thread and a file descriptor for each.
 - A NetFlow or IPFIX packet the collector can't read no longer stops the agent's flow listener for good (Traffic stayed empty until the agent restarted): it is skipped, logged and counted.

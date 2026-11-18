@@ -180,6 +180,32 @@ def test_open_buffer_settings(tmp_path):
     assert 'must be numbers' in said[0]
 
 
+@pytest.mark.parametrize('setting', [
+    {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'inf'}, {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'nan'},
+    {'FLOORBIT_AGENT_BUFFER_MAX_MB': '1e400'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': 'nan'},
+    {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '0'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '-1'}])
+def test_a_buffer_number_that_is_no_size_turns_the_buffer_off_not_syslog(tmp_path, monkeypatch, setting):
+    env = {'FLOORBIT_DATA_FILE': str(tmp_path / 'agent-data.json'), **setting}
+    said = []
+    assert agent_mod.open_buffer('syslog', env, out=said.append) is None
+    assert 'must be numbers' in said[0]
+    # The relay still starts and keeps lines in memory; it used to fail with the buffer.
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv('FLOORBIT_AGENT_SYSLOG_BIND', '127.0.0.1')
+
+    class Sender:
+        def send_syslog(self, lines):
+            return True
+
+    relay = agent_mod.start_syslog(Sender(), '0', out=said.append)
+    try:
+        assert relay and relay.spool is None
+    finally:
+        if relay:
+            relay.stop()
+
+
 def test_metrics_count_the_buffer(tmp_path):
     from floorbit_agent.metrics import Metrics, relay_collector
     hosted = Hosted()

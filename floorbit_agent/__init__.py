@@ -18,6 +18,7 @@ import contextlib
 import gzip
 import io
 import json
+import math
 import os
 import pathlib
 import signal
@@ -815,7 +816,11 @@ def open_buffer(kind, env, out=print):
         max_mb = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_MB') or 2048)
         max_hours = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_HOURS') or 24)
     except ValueError:
-        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers; no disk buffer')
+        max_mb = max_hours = math.nan
+    # "inf" or "nan" passed float() and then broke int() below, which took the syslog relay down
+    # with it; no hours or fewer would drop every record the moment it is written.
+    if not (math.isfinite(max_mb) and math.isfinite(max_hours) and max_hours > 0):
+        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers (hours above 0); no disk buffer')
         return None
     if max_mb <= 0:
         return None
