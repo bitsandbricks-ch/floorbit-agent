@@ -188,10 +188,20 @@ class Keepalived:
         if ok == self._was_healthy:
             return
         path = os.path.join(self.dir, 'healthy')
-        # Written whole and renamed: keepalived never reads half a file.
-        with open(path + '.new', 'w', encoding='utf-8') as f:
-            f.write('0\n' if ok else '1\n')
-        os.replace(path + '.new', path)
+        text = b'0\n' if ok else b'1\n'
+        try:
+            # Written whole and renamed: keepalived never reads half a file.
+            with open(path + '.new', 'wb') as f:
+                f.write(text)
+            os.replace(path + '.new', path)
+        except OSError:
+            # A full disk: two bytes over the two already there need no new space. Without this the
+            # old answer would stay, and an agent that stopped answering would keep the VIPs.
+            fd = os.open(path, os.O_WRONLY)
+            try:
+                os.write(fd, text)
+            finally:
+                os.close(fd)
         if self._was_healthy is not None:
             self.log('[vrrp] healthy again: taking part again' if ok
                      else '[vrrp] not healthy: giving the VIPs away')
@@ -211,7 +221,11 @@ class Keepalived:
                 ok = bool(self.healthy())
             except Exception:  # noqa: BLE001  # a check that breaks counts as not healthy
                 ok = False
-            self._write_health(ok)
+            try:
+                self._write_health(ok)
+            except OSError as exc:
+                # Keep watching: the next round tries again (_was_healthy is still the old answer).
+                self.log(f'[vrrp] cannot write the health file: {exc}')
 
     def stop(self):
         """Stop keepalived: it sends priority 0 on the way out, so the others take over at once."""

@@ -72,10 +72,16 @@ class Updater:
             return default
 
     def _save(self):
+        # A full or read-only disk must not stop the round: the plugin settings still get applied,
+        # the state stays in memory and is written again on the next change.
         tmp = self.state_path.with_suffix('.tmp')
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(self.state, f, indent=1, sort_keys=True)
-        os.replace(tmp, self.state_path)
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self.state, f, indent=1, sort_keys=True)
+            os.replace(tmp, self.state_path)
+        except OSError as exc:
+            self.log(f'[agent] could not save the plugin update state: {exc}')
+            tmp.unlink(missing_ok=True)
 
     def _entry(self, pid):
         return self.state.setdefault(pid, {'current': None, 'previous': None, 'bad': [], 'pending': None})

@@ -40,6 +40,7 @@ All notable changes to this project are listed here. The format follows
 
 - A plugin bundle offer whose `agent_api` is not a whole number waits as "needs a newer agent image" instead of stopping the other offers in that round.
 - A plugin id, version or bundle file name with a trailing newline is refused; it used to pass the name check.
+- A full disk no longer stops the agent applying plugin settings (the update state stays in memory until it can be saved), and no longer leaves a VRRP agent holding its addresses after it stops answering: the health file is overwritten in place.
 - A plugin whose start or stop never returns no longer holds up the agent: it is given up on after 30 (start) or 15 (stop) seconds and shown as failed.
 - A plugin's sender that hits an error (a disk hiccup) keeps going instead of stopping for good while the spool fills up.
 - A plugin's HTTP listener refuses a bad `Content-Length` and bodies over 32 MB (400, 413) instead of reading as much as the client sends, and drops a client that stalls for 30 seconds.

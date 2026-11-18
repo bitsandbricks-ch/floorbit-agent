@@ -346,3 +346,22 @@ def test_an_offer_with_a_path_in_it_touches_nothing(hall, pid, version, file):
 def test_a_trailing_newline_is_no_valid_name(regex, value):
     # "$" matches before a final newline; these names become folders on the agent.
     assert regex.match(value) is None and regex.match(value.strip())
+
+
+def test_a_full_disk_still_applies_the_settings(hall, monkeypatch):
+    # The state file can't be written: the update still runs, and the round still applies settings.
+    started, hosted, pem, _clock, tmp_path, lines = hall
+    host = started()
+    host.pull()
+    real_open = open
+
+    def full(path, mode="r", *a, **kw):
+        if "w" in mode and str(path).endswith("state.tmp"):
+            raise OSError(28, "No space left on device")
+        return real_open(path, mode, *a, **kw)
+
+    monkeypatch.setattr("builtins.open", full)
+    hosted.publish(tmp_path, pem, "0.5.0")
+    host.pull()
+    assert runs(host) == "0.5.0"
+    assert any("could not save the plugin update state" in line for line in lines)
