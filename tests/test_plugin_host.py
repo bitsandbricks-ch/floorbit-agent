@@ -401,3 +401,195 @@ def test_a_bad_hint_is_ignored(setup):
         hosted.ha, hosted.etag = bad, f"e-{bad!r}"
         host.pull()
         assert host.primary(), bad
+
+
+# ── trying to break it ──────────────────────────────────────────────────────────────────
+
+HUNG_PY = """
+import threading
+from floorbit.plugins.agent import AgentPlugin as Base
+
+FOREVER = threading.Event()
+
+class AgentPlugin(Base):
+    def start(self):
+        if self.settings.get('hang_start'):
+            FOREVER.wait(60)
+
+    def stop(self):
+        if self.settings.get('hang_stop'):
+            FOREVER.wait(60)
+
+    def check(self):
+        return 'ok'
+
+    def call_status(self, args):
+        FOREVER.wait(args.get('wait', 0))
+        return {'up': True}
+"""
+
+
+@pytest.fixture
+def hung(tmp_path, monkeypatch):
+    from floorbit_agent import plugin_host
+    monkeypatch.setattr(plugin_host, "START_TIMEOUT", 0.3)
+    monkeypatch.setattr(plugin_host, "STOP_TIMEOUT", 0.3)
+    folder = tmp_path / "hungthing"
+    folder.mkdir()
+    (folder / "agent.py").write_text(textwrap.dedent(HUNG_PY))
+    hosted = FakeHosted()
+    agent = agent_mod.Agent("https://floor.example.com", "fba_x_y", lambda m, a: [], http=hosted, log=lambda *_: None)
+    host = PluginHost(agent, {"hungthing": Spec(folder, "hungthing")}, str(tmp_path / "state"), env={},
+                      log=lambda *_: None)
+    yield host
+    import sys
+    sys.modules["floorbit_agent_plugin_hungthing"].FOREVER.set()
+    host.stop()
+    sys.modules.pop("floorbit_agent_plugin_hungthing", None)
+
+
+def test_a_start_that_never_returns_is_given_up_on(hung):
+    started = time.time()
+    hung.apply({"hungthing": {**CONFIG, "settings": {"hang_start": True}}})
+    assert time.time() - started < 3
+    assert "did not return" in hung.failed["hungthing"]
+    assert hung.report()["hungthing"]["status"] == "error"
+
+
+def test_a_stop_that_never_returns_does_not_hold_the_host(hung):
+    hung.apply({"hungthing": {**CONFIG, "settings": {"hang_stop": True}}})
+    assert "hungthing" in hung.running
+    started = time.time()
+    hung.apply({})
+    assert time.time() - started < 3
+    assert "hungthing" not in hung.running
+
+
+def test_a_flood_of_calls_is_refused_past_the_limit(hung):
+    import threading
+
+    from floorbit.plugins.base import PluginError
+
+    from floorbit_agent import plugin_host
+    hung.apply({"hungthing": dict(CONFIG)})
+    threads = [threading.Thread(target=hung.call, args=(["hungthing", "call", "status", {"wait": 5}],), daemon=True)
+               for _ in range(plugin_host.CALLS_PER_PLUGIN)]
+    for t in threads:
+        t.start()
+    deadline = time.time() + 3
+    while hung._busy.get("hungthing", 0) < plugin_host.CALLS_PER_PLUGIN and time.time() < deadline:
+        time.sleep(0.01)
+    with pytest.raises(PluginError, match="still busy"):
+        hung.call(["hungthing", "call", "status", {}])
+    import sys
+    sys.modules["floorbit_agent_plugin_hungthing"].FOREVER.set()
+    for t in threads:
+        t.join(3)
+    assert hung.call(["hungthing", "call", "status", {}]) == {"up": True}
+
+
+def test_a_sender_survives_an_error_and_keeps_sending(setup, monkeypatch):
+    host, hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    real = ctx._send_batch
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("disk hiccup")
+        return real()
+    monkeypatch.setattr(ctx, "_send_batch", flaky)
+    monkeypatch.setattr("floorbit_agent.plugin_host.SEND_RETRY", 0.05)
+    ctx.send("stats", {"hits": 1})
+    deadline = time.time() + 5
+    while time.time() < deadline and not hosted.posts:
+        ctx._wake.set()
+        time.sleep(0.05)
+    assert hosted.posts and len(calls) >= 2
+
+
+@pytest.mark.parametrize("length, status", [("-1", 400), ("nope", 400), (str(64 * 1024 * 1024), 413)])
+def test_a_listener_refuses_bad_or_huge_bodies(setup, length, status):
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    got = []
+    port = ctx.listen_http(0, lambda method, path, headers, body: (got.append(body), (204, b""))[1], host="127.0.0.1")
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(f"POST /write HTTP/1.1\r\nHost: x\r\nContent-Length: {length}\r\n\r\n".encode())
+        answer = s.recv(200).decode()
+    assert answer.startswith(f"HTTP/1.0 {status}") or answer.startswith(f"HTTP/1.1 {status}")
+    assert got == []
+
+
+def test_a_client_that_stalls_gives_its_thread_back(setup, monkeypatch):
+    monkeypatch.setattr("floorbit_agent.plugin_host.HTTP_TIMEOUT", 0.3)
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    port = ctx.listen_http(0, lambda *a: (204, b""), host="127.0.0.1")
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"POST /write HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\npartial")
+        s.settimeout(3)
+        started = time.time()
+        assert s.recv(10) == b""          # the server closed it
+        assert time.time() - started < 2.5
+
+
+def test_a_thread_that_dies_is_started_again_with_backoff(setup, monkeypatch):
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    waits, runs = [], []
+    monkeypatch.setattr(ctx.stopping, "wait", lambda s: waits.append(s) or False)
+
+    def flaky():
+        runs.append(1)
+        if len(runs) < 8:
+            raise OSError("device away")
+
+    ctx.thread(flaky).join(5)
+    assert len(runs) == 8                                  # the eighth run returned: done
+    assert waits == [5, 10, 20, 40, 80, 160, 300]          # doubling, capped at five minutes
+    report = host.report()["hallthing"]
+    assert report["metrics"]["thread_restarts"] == 7
+    assert "failed 7 times in a row" in report["message"]
+    assert "starting it again in 300 s" in report["errors"][-1]["error"]
+
+
+def test_a_stopped_plugin_does_not_restart_its_thread(setup):
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    runs = []
+
+    def dies():
+        runs.append(1)
+        ctx.stopping.set()
+        raise OSError("device away")
+
+    ctx.thread(dies).join(5)
+    assert runs == [1]
+
+
+def test_a_long_healthy_run_resets_the_backoff(setup, monkeypatch):
+    from floorbit_agent import plugin_host
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    waits, runs = [], []
+    clock = [0.0]
+    monkeypatch.setattr(plugin_host.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ctx.stopping, "wait", lambda s: waits.append(s) or False)
+
+    def flaky():
+        runs.append(1)
+        if len(runs) == 3:
+            clock[0] += plugin_host.RESTART_RESET     # this run went well for a long time
+        if len(runs) < 5:
+            raise OSError("device away")
+
+    ctx.thread(flaky).join(5)
+    assert waits == [5, 10, 5, 10]

@@ -178,3 +178,28 @@ def test_local_check_needs_no_hosted_floorbit():
         server.shutdown()
     with pytest.raises(OSError):
         vrrp.local_check(f'127.0.0.1:{port}', timeout=0.5)()
+
+
+def test_a_full_disk_still_gives_the_vips_away(fake_keepalived, monkeypatch):
+    # No new file can be made: the health file is overwritten in place, so keepalived still hears it.
+    monkeypatch.setattr(vrrp, 'CHECK_EVERY', 0.1)
+    healthy = [True]
+    k = vrrp.Keepalived(vrrp.settings_from(ENV), Metrics(), log=lambda *_: None, binary=fake_keepalived,
+                        healthy=lambda: healthy[0])
+    k.start()
+    try:
+        assert vrrp.wait_for_state(k, 'MASTER')
+        real_open = open
+
+        def full(path, mode='r', *a, **kw):
+            if 'w' in mode and str(path).endswith('healthy.new'):
+                raise OSError(28, 'No space left on device')
+            return real_open(path, mode, *a, **kw)
+
+        monkeypatch.setattr('builtins.open', full)
+        healthy[0] = False
+        assert vrrp.wait_for_state(k, 'FAULT')
+        healthy[0] = True
+        assert vrrp.wait_for_state(k, 'MASTER')
+    finally:
+        k.stop()

@@ -8,6 +8,7 @@ import pytest
 from floorbit.plugins import bundles
 
 import floorbit_agent as agent_mod
+from floorbit_agent import bundles as agent_bundles
 from floorbit_agent.bundles import Updater, cli
 from floorbit_agent.plugin_host import PluginHost
 
@@ -220,6 +221,18 @@ def test_no_pinned_key_or_a_newer_agent_api_waits(hall):
     assert host.updater.report()["plugins"]["hallthing"]["pending"]["why"] == "needs a newer agent image"
 
 
+@pytest.mark.parametrize("api", ["2", [1], 1.5, True, None])
+def test_an_odd_agent_api_waits_and_never_stops_the_round(hall, api):
+    started, hosted, pem, _clock, tmp_path, _ = hall
+    host = started()
+    hosted.publish(tmp_path, pem, "0.6.0")
+    hosted.offer["hallthing"]["agent_api"] = api
+    hosted.etag += 1
+    host.pull()
+    assert runs(host) == "0.4.0"
+    assert host.updater.report()["plugins"]["hallthing"]["pending"]["why"] == "needs a newer agent image"
+
+
 def test_approve_on_the_agent(hall):
     started, hosted, pem, _clock, tmp_path, _ = hall
     host = started(policy="approve")
@@ -334,5 +347,54 @@ def test_an_offer_whose_id_or_version_is_a_path_touches_nothing_outside(tmp_path
     assert not any("refused" in str(e) for e in up.events)
     # An agent_api that isn't a number waits like a newer one, instead of raising out of the pull.
     for odd in ("x", [2], float("inf")):
-        up.offer(None, {"hallthing": {"version": "9", "file": "a", "sha256": "b", "agent_api": odd}})
+        up.offer(None, {"hallthing": {"version": "9", "file": "hallthing-9.tar.gz", "sha256": "b", "agent_api": odd}})
         assert up.report()["plugins"]["hallthing"]["pending"]["why"] == "needs a newer agent image"
+
+
+@pytest.mark.parametrize("pid, version, file", [
+    ("../../escape", "0.5.0", "hallthing-0.5.0.tar.gz"),
+    ("hallthing", "9/../../../escape", "hallthing-0.5.0.tar.gz"),
+    ("hallthing", "0.5.0", "../hallthing-0.5.0.tar.gz"),
+    ("hallthing", "0.5..0", "hallthing-0.5.0.tar.gz"),
+])
+def test_an_offer_with_a_path_in_it_touches_nothing(hall, pid, version, file):
+    started, hosted, pem, _clock, tmp_path, lines = hall
+    host = started()
+    hosted.publish(tmp_path, pem, "0.5.0")
+    entry = hosted.offer.pop("hallthing")
+    hosted.offer[pid] = {**entry, "version": version, "file": file}
+    hosted.etag += 1
+    canary = tmp_path / "escape"
+    canary.mkdir(exist_ok=True)
+    host.pull()
+    assert runs(host) == "0.4.0"
+    assert canary.exists()
+    assert any("bad id, version or file" in line for line in lines)
+
+
+@pytest.mark.parametrize('regex, value', [
+    (agent_bundles.ID_RE, 'lancache\n'), (agent_bundles.VERSION_RE, '1.0.0\n'),
+    (agent_bundles.FILE_RE, 'lancache-1.0.0.tar.gz\n'),
+])
+def test_a_trailing_newline_is_no_valid_name(regex, value):
+    # "$" matches before a final newline; these names become folders on the agent.
+    assert regex.match(value) is None and regex.match(value.strip())
+
+
+def test_a_full_disk_still_applies_the_settings(hall, monkeypatch):
+    # The state file can't be written: the update still runs, and the round still applies settings.
+    started, hosted, pem, _clock, tmp_path, lines = hall
+    host = started()
+    host.pull()
+    real_open = open
+
+    def full(path, mode="r", *a, **kw):
+        if "w" in mode and str(path).endswith("state.tmp"):
+            raise OSError(28, "No space left on device")
+        return real_open(path, mode, *a, **kw)
+
+    monkeypatch.setattr("builtins.open", full)
+    hosted.publish(tmp_path, pem, "0.5.0")
+    host.pull()
+    assert runs(host) == "0.5.0"
+    assert any("could not save the plugin update state" in line for line in lines)

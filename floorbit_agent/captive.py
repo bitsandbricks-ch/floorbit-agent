@@ -35,7 +35,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import http_limits
 
 PATH = '/.well-known/captive-portal'
-HELLO_PATH = re.compile(r'^/floorbit/hello/([A-Za-z0-9_-]{16,64})$')
+HELLO_PATH = re.compile(r'^/floorbit/hello/([A-Za-z0-9_-]{16,64})\Z')
 KIND = 'application/captive+json'
 REFRESH = 30          # seconds between asks; a check-in shows up here within this
 RETRY = 10            # after a failed ask

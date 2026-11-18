@@ -16,7 +16,7 @@ import time
 
 MAX_BYTES = 2 * 1024 ** 3
 MAX_AGE = 24 * 3600
-_NAME = re.compile(r'^(\d{12})\.jsonl$')
+_NAME = re.compile(r'^(\d{12})\.jsonl\Z')
 
 
 class Spool:

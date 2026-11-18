@@ -32,9 +32,40 @@ PULL_EVERY = 60
 HA_HINT_FRESH = 3 * PULL_EVERY
 PULL_UNSUPPORTED = 600     # a hosted Floorbit without agent plugins: ask again this rarely
 SEND_RETRY = 10
+# A plugin thread that raises is started again, waiting longer each time (5 s, 10 s, ... up to
+# 5 min), so one bad device doesn't stop a plugin for the rest of the event. After RESTART_LOUD
+# restarts in a row its health says it keeps failing; a run of RESTART_RESET seconds counts as healthy.
+RESTART_FIRST = 5
+RESTART_MAX = 300
+RESTART_LOUD = 5
+RESTART_RESET = 600
 SPOOL_MAX_BYTES = 256 * 1024 ** 2
 SPOOL_MAX_AGE = 24 * 3600
 BATCH = 50                 # records a sender posts before it looks at the spool again
+# A plugin's start() or stop() that doesn't return within this is given up on: it must not hold
+# the host's lock, which the report and every other plugin need.
+START_TIMEOUT = 30
+STOP_TIMEOUT = 15
+# Calls and actions from the hosted side running at once per plugin; past that, "busy" at once.
+CALLS_PER_PLUGIN = 4
+# A listener's request: the most it reads, and how long a slow client may take.
+HTTP_MAX_BODY = 32 * 1024 * 1024
+HTTP_TIMEOUT = 30
+
+
+def _bounded(fn, timeout, name):
+    """Run ``fn`` on its own thread for at most ``timeout`` seconds: (finished, error)."""
+    box = {}
+
+    def run():
+        try:
+            fn()
+        except BaseException as exc:  # noqa: BLE001  # handed back to the caller
+            box['error'] = exc
+    t = threading.Thread(target=run, name=name, daemon=True)
+    t.start()
+    t.join(timeout)
+    return not t.is_alive(), box.get('error')
 
 
 class AgentContext:
@@ -131,7 +162,11 @@ class AgentContext:
     def _sender(self):
         while not self.stopping.is_set():
             self._wake.clear()              # before sending, so a send() meanwhile isn't missed
-            sent = self._send_some()
+            try:
+                sent = self._send_some()
+            except Exception as exc:  # noqa: BLE001  # a sender that dies would leave the spool to fill up
+                self.error(f'sending failed: {type(exc).__name__}: {exc}; trying again')
+                sent = None
             if sent is None:                # failed: wait before trying again
                 self.stopping.wait(SEND_RETRY)
             elif sent == 0:
@@ -144,7 +179,9 @@ class AgentContext:
 
     def _send_batch(self):
         sent = 0
-        for kind, record in list(self._latest.items()):
+        with self._latest_lock:
+            latest = list(self._latest.items())
+        for kind, record in latest:
             status = self.host.post(self.id, kind, record['payload'])
             if status is None:
                 return None
@@ -188,12 +225,28 @@ class AgentContext:
     # threads and listeners --------------------------------------------------------------
     def thread(self, fn, name=None):
         """Run ``fn`` in a thread of the plugin's; it should return once ``ctx.stopping`` is set."""
+        label = getattr(fn, '__name__', 'thread')
+
         def run():
-            try:
-                fn()
-            except Exception as exc:  # noqa: BLE001  # say it; the rest of the agent goes on
-                self.health('error', f'{getattr(fn, "__name__", "thread")} stopped: {type(exc).__name__}: {exc}')
-                self.error(f'{getattr(fn, "__name__", "thread")} stopped: {type(exc).__name__}: {exc}')
+            failures = 0
+            while not self.stopping.is_set():
+                began = time.monotonic()
+                try:
+                    fn()
+                    return
+                except Exception as exc:  # noqa: BLE001  # say it, wait, start it again
+                    if time.monotonic() - began >= RESTART_RESET:
+                        failures = 0
+                    failures += 1
+                    wait = min(RESTART_MAX, RESTART_FIRST * 2 ** (failures - 1))
+                    why = f'{label} stopped: {type(exc).__name__}: {exc}'
+                    self.counter('thread_restarts')
+                    self.error(f'{why}; starting it again in {wait} s')
+                    if failures >= RESTART_LOUD:
+                        self.health('error', f'{why} (failed {failures} times in a row; next try in {wait} s)')
+                    else:
+                        self.health('error', f'{why}; starting it again in {wait} s')
+                    self.stopping.wait(wait)
         t = threading.Thread(target=run, name=name or f'plugin-{self.id}', daemon=True)
         self._threads.append(t)
         t.start()
@@ -238,9 +291,27 @@ class AgentContext:
         context = self._tls_context() if tls else None
 
         class Handler(BaseHTTPRequestHandler):
+            timeout = HTTP_TIMEOUT        # a client that stalls gives its thread back
+
+            def _reply(self, status, out=b''):
+                self.send_response(status)
+                self.send_header('Content-Length', str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
             def _any(self):
-                size = int(self.headers.get('Content-Length') or 0)
-                body = self.rfile.read(min(size, 32 * 1024 * 1024)) if size else b''
+                try:
+                    size = int(self.headers.get('Content-Length') or 0)
+                except ValueError:
+                    size = -1
+                if size < 0:
+                    # read(-1) would read until the client stops: as much as it likes.
+                    ctx.counter('http_refused')
+                    return self._reply(400, b'bad Content-Length')
+                if size > HTTP_MAX_BODY:
+                    ctx.counter('http_refused')
+                    return self._reply(413, b'too large')
+                body = self.rfile.read(size) if size else b''
                 try:
                     status, out = handler(self.command, self.path, dict(self.headers), body)
                 except Exception as exc:  # noqa: BLE001
@@ -248,10 +319,7 @@ class AgentContext:
                     ctx.health_.error(f'http handler: {type(exc).__name__}: {exc}')
                     status, out = 500, 'error'
                 out = out.encode() if isinstance(out, str) else (out or b'')
-                self.send_response(status)
-                self.send_header('Content-Length', str(len(out)))
-                self.end_headers()
-                self.wfile.write(out)
+                self._reply(status, out)
 
             do_GET = do_POST = do_PUT = _any
 
@@ -325,6 +393,8 @@ class PluginHost:
         self._reload = threading.Event()
         self._stop = threading.Event()
         self._thread = None
+        self._busy = {}           # plugin id -> calls from the hosted side running now
+        self._busy_lock = threading.Lock()
         self.wanted = {}          # plugin id -> its config, as the hosted side last said
         self.updater = None       # bundles.Updater: signed plugin updates from the hosted side
         self.vrrp = None          # vrrp.Keepalived while VRRP runs here
@@ -421,10 +491,15 @@ class PluginHost:
         ctx = AgentContext(self, pid, config)
         try:
             plugin = self._load_class(spec)(ctx)
-            plugin.start()
         except Exception as exc:  # noqa: BLE001  # one broken plugin must not stop the agent
+            plugin, error = None, exc
+        else:
+            finished, error = _bounded(plugin.start, START_TIMEOUT, f'plugin-{pid}-start')
+            if not finished:
+                error = TimeoutError(f'start() did not return within {START_TIMEOUT} s')
+        if error is not None:
             ctx.close()
-            self.failed[pid] = f'{type(exc).__name__}: {exc}'[:300]
+            self.failed[pid] = f'{type(error).__name__}: {error}'[:300]
             self.log(f'[agent] plugin {pid} could not start: {self.failed[pid]}')
             return
         self.failed.pop(pid, None)
@@ -435,10 +510,11 @@ class PluginHost:
         run = self.running.pop(pid, None)
         if run is None:
             return
-        try:
-            run.plugin.stop()
-        except Exception as exc:  # noqa: BLE001
-            self.log(f'[agent] plugin {pid} failed to stop cleanly: {exc}')
+        finished, error = _bounded(run.plugin.stop, STOP_TIMEOUT, f'plugin-{pid}-stop')
+        if not finished:
+            self.log(f'[agent] plugin {pid} did not stop within {STOP_TIMEOUT} s; leaving it behind')
+        elif error is not None:
+            self.log(f'[agent] plugin {pid} failed to stop cleanly: {error}')
         run.ctx.close()
         self.log(f'[agent] plugin {pid} stopped ({why})')
 
@@ -561,7 +637,16 @@ class PluginHost:
         method = getattr(run.plugin, f'{way}_{name}', None)
         if not callable(method):
             raise PluginError(f'{pid} has no {way}_{name}()')
-        return method(params if isinstance(params, dict) else {})
+        with self._busy_lock:
+            if self._busy.get(pid, 0) >= CALLS_PER_PLUGIN:
+                run.ctx.counter('calls_refused')
+                raise PluginError(f'{pid} is still busy with earlier calls on this agent; try again shortly')
+            self._busy[pid] = self._busy.get(pid, 0) + 1
+        try:
+            return method(params if isinstance(params, dict) else {})
+        finally:
+            with self._busy_lock:
+                self._busy[pid] -= 1
 
     # health -------------------------------------------------------------------------------------
     def report(self):
