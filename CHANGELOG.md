@@ -44,6 +44,7 @@ All notable changes to this project are listed here. The format follows
 ### Fixed
 
 - Stopping the agent while it was sending syslog could fail with "pop from an empty deque" and keep the waiting lines on disk twice.
+- A syslog batch the hosted Floorbit refuses as too big is sent again in halves instead of blocking the lines behind it; a single line still too big is skipped and logged.
 - A burst of syslog no longer loses most of its lines: one thread reads the port instead of a thread per datagram, which kept only about a fifth of a 25,000-line-a-second burst. Syslog and NetFlow ask for an 8 MB receive buffer.
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
 - `/healthz` no longer reads as unhealthy when the clock steps back.

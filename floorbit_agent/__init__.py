@@ -608,6 +608,16 @@ class Agent:
         resp = self._post('/api/agent/v1/syslog', {'lines': lines, 'dropped': dropped})
         if resp.status_code == 409:
             raise TurnedOff((resp.json() or {}).get('error') or 'Syslog is turned off on the hosted Floorbit.')
+        if resp.status_code == 413:
+            # Too big for the hosted side: halves, so one batch of huge lines can't block the
+            # backlog behind it for good. A single line that's still too big is skipped and said.
+            if len(lines) > 1:
+                half = len(lines) // 2
+                first = self.send_syslog(lines[:half], dropped) or {}
+                second = self.send_syslog(lines[half:]) or {}
+                return {'taken': (first.get('taken') or 0) + (second.get('taken') or 0)}
+            self.log('[agent] skipped a syslog line the hosted Floorbit refused as too big')
+            return {'taken': 0}
         return self._check(resp)
 
     def _said(self, resp):
