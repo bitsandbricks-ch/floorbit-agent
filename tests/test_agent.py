@@ -317,7 +317,8 @@ def test_the_agent_reports_about_itself_over_the_link():
     way, report = host.reports[0]
     assert way == "link"
     assert set(report) == {"up_seconds", "reconnects", "link_drops", "calls_busy", "answers_failed",
-                           "syslog_received", "syslog_sent", "syslog_dropped", "syslog_backlog", "flows_packets"}
+                           "syslog_received", "syslog_sent", "syslog_dropped", "syslog_backlog", "flows_packets",
+                           "captive_shown", "captive_done"}
     assert all(isinstance(v, (int, float)) and v >= 0 for v in report.values())
 
 

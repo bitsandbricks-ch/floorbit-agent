@@ -146,3 +146,30 @@ def test_the_agent_reports_the_hello_and_where_laptops_reach_it(monkeypatch):
     monkeypatch.setenv("FLOORBIT_AGENT_LAN_URL", "http://agent.lan.example.com:8908/")
     assert make(FakeHost()).lan_url == "http://agent.lan.example.com:8908"
     assert make(FakeHost()).report()["lan_url"] == "http://agent.lan.example.com:8908"
+
+
+def test_metrics_count_answers_and_say_how_old_the_list_is_but_never_an_ip():
+    from floorbit_agent import metrics as metrics_mod
+    from tests.test_metrics import sample
+    said = []
+    api = captive.Captive(lambda: {"done": ["192.0.2.10"], "portal_url": PORTAL}, log=said.append)
+    api.refresh()
+    assert said == ["[captive] answering: 1 clients checked in"]
+    api.answer("192.0.2.10")
+    api.answer("192.0.2.20")
+    api.answer("192.0.2.21")
+    m = metrics_mod.Metrics()
+    m.collect(metrics_mod.relay_collector(captive=api))
+    text = m.render()
+    assert sample(text, "floorbit_agent_captive_answers_total", answer="captive") == 2
+    assert sample(text, "floorbit_agent_captive_answers_total", answer="done") == 1
+    assert sample(text, "floorbit_agent_captive_checked_in") == 1
+    assert sample(text, "floorbit_agent_captive_failing") == 0
+    assert sample(text, "floorbit_agent_captive_list_age_seconds") < 5
+    assert "192.0.2." not in text
+
+    def away():
+        raise OSError("hosted is away")
+    api.ask = away
+    api.refresh()
+    assert sample(m.render(), "floorbit_agent_captive_failing") == 1

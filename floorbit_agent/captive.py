@@ -59,6 +59,8 @@ class Captive:
         self.asked_at = None
         self.error = None
         self._stop = threading.Event()
+        self._count = threading.Lock()
+        self.asked = {'captive': 0, 'done': 0}   # answers given, for /metrics: counts only, no IPs
 
     def refresh(self, now=None):
         """Ask the hosted Floorbit once. Returns the seconds until the next ask."""
@@ -76,6 +78,9 @@ class Captive:
             return RETRY
         self.done = frozenset(ip for ip in (_ip(x) for x in body.get('done') or []) if ip)
         self.portal = self.portal_override or str(body.get('portal_url') or '')
+        if not self.loaded or self.error:
+            self.log(f'[captive] answering: {len(self.done)} clients checked in'
+                     + ('' if self.portal else ', but no portal URL yet (PUBLIC_URL on the hosted side)'))
         self.loaded, self.error = True, None
         self.asked_at = time.time() if now is None else now
         return REFRESH
@@ -83,7 +88,10 @@ class Captive:
     def answer(self, ip):
         """The RFC 8908 body for a client."""
         ip = _ip(ip)
-        if not self.loaded or not self.portal or not ip or ip in self.done:
+        captive = bool(self.loaded and self.portal and ip and ip not in self.done)
+        with self._count:
+            self.asked['captive' if captive else 'done'] += 1
+        if not captive:
             return {'captive': False}
         return {'captive': True, 'user-portal-url': self.portal}
 
