@@ -37,11 +37,13 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
+- Built for a 1,000-switch hall: 16 seat lookups run side by side (was 3), with more room for SSH and port calls, and the NetFlow socket is read in its own thread, away from writing the raw files and the minute's summary, so a busy summary no longer loses datagrams.
 - Built and tested on Floorbit with the night's work in it (`FLOORBIT_REF`).
 - The work from #8 to #15 reaches `main`: those pull requests were merged into stack branches that had already gone in.
 
 ### Fixed
 
+- Stopping the agent while it was sending syslog could fail with "pop from an empty deque" and keep the waiting lines on disk twice.
 - A burst of syslog no longer loses most of its lines: one thread reads the port instead of a thread per datagram, which kept only about a fifth of a 25,000-line-a-second burst. Syslog and NetFlow ask for an 8 MB receive buffer.
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
 - `/healthz` no longer reads as unhealthy when the clock steps back.
