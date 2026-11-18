@@ -53,11 +53,12 @@ lab/run-local.sh stop
 ```
 
 Plugin settings are the same for every agent, so on one machine only agent A runs syslog, NetFlow
-and the check-in note (they would take the same ports); the failover's syslog test needs the
+the check-in note and the front door (they would take the same ports); the failover's syslog test needs the
 Docker lab.
 
 The setup step (`lab/e2e/setup.py`) sets up the agents' plugins in Floorbit, as the crew would at
-an event: the lab LibreNMS, syslog and NetFlow from the hall and the check-in note. The agents get
+an event: the lab LibreNMS, syslog and NetFlow from the hall, the check-in note and the attendees'
+front door (check-in takes the seat PC's address only from there). The agents get
 only their URL and key.
 
 CI runs the Docker lab on every pull request (the `lab` job), normal run and failover.

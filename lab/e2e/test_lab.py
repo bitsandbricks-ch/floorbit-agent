@@ -78,7 +78,11 @@ def test_a_shut_port_is_disabled(fb, lab):
 
 def test_a_player_checks_in_and_the_seat_learns_its_port(fb, lab):
     seat = lab.seat('A-7')
-    r = requests.post(f'{fb.url}/api/checkin', json={'seat': seat.label, 'username': seat.nick},
+    # Through an agent's front door, as from the seat's PC: Floorbit takes the address only from there.
+    door = os.environ.get('LAB_FRONT_DOOR', '').rstrip('/')
+    if not door:
+        pytest.skip('LAB_FRONT_DOOR is not set')
+    r = requests.post(f'{door}/api/checkin', json={'seat': seat.label, 'username': seat.nick},
                       headers={'X-Forwarded-For': seat.ip}, timeout=30)
     assert r.status_code == 200, r.text
     assert r.json()['seat'] == seat.label

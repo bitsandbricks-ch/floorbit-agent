@@ -2,7 +2,8 @@
 against fakes: a real Floorbit, real agents, the lab LibreNMS and the simulated switches.
 
 Settings (env): LAB_FLOORBIT_URL, LAB_ADMIN_PASSWORD, LAB_AGENT_METRICS ("name=url,..."),
-LAB_CAPTIVE (an agent's captive portal URL), LAB_AGENT_DOWN (the agent the failover run stopped).
+LAB_CAPTIVE (an agent's captive portal URL), LAB_FRONT_DOOR (an agent's front door),
+LAB_AGENT_DOWN (the agent the failover run stopped).
 """
 import os
 import pathlib

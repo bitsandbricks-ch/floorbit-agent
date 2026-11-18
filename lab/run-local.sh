@@ -8,7 +8,7 @@
 #   lab/run-local.sh stop
 #
 # Ports: Floorbit 5000 (and its own syslog 5514), lab LibreNMS 18000, devices UDP 11161-11168, agents: syslog 5524,
-# NetFlow 2065, captive 8908 (agent A only), metrics 9520/9521, Redis 6390. State in $LAB_STATE (/tmp/floorbit-lab).
+# NetFlow 2065, captive 8908, front door 8443 (agent A only), metrics 9520/9521, Redis 6390. State in $LAB_STATE (/tmp/floorbit-lab).
 set -e
 LAB=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$LAB")
@@ -41,11 +41,11 @@ start() {
     CHECKIN_ENABLED=true CHECKIN_TRUST_PROXY=true CAPTIVE_ENABLED=true PUBLIC_URL=http://127.0.0.1:5000 \
     $PY -m gunicorn --bind 127.0.0.1:5000 --workers 1 --worker-class gthread --threads 32 app:app \
     > "$STATE/floorbit.log" 2>&1 &)
-  # Both agents on one machine can't take the same ports: only agent A runs syslog, NetFlow and the
-  # note here, so the failover run has no syslog (the Docker lab has it on both).
+  # Both agents on one machine can't take the same ports: only agent A runs syslog, NetFlow, the
+  # note and the front door here, so the failover run has no syslog (the Docker lab has it on both).
   $PY "$LAB/e2e/setup.py" --url http://127.0.0.1:5000 --out "$STATE/keys" --password lab-admin-password \
     --librenms-url http://127.0.0.1:18000 --syslog-port 5524 --flows-port 2065 --captive 127.0.0.1:8908 \
-    --captive-proxies 127.0.0.1 --listeners-on agent-a agent-a agent-b
+    --front-door 127.0.0.1:8443 --captive-proxies 127.0.0.1 --listeners-on agent-a agent-a agent-b
 
   i=0
   for a in agent-a agent-b; do
@@ -67,7 +67,7 @@ start() {
 e2e() {
   LAB_FLOORBIT_URL=http://127.0.0.1:5000 LAB_ADMIN_PASSWORD=lab-admin-password \
     LAB_AGENT_METRICS=agent-a=http://127.0.0.1:9520 \
-    LAB_CAPTIVE=http://127.0.0.1:8908 $PY -m pytest -q "$LAB/e2e" "$@"
+    LAB_CAPTIVE=http://127.0.0.1:8908 LAB_FRONT_DOOR=http://127.0.0.1:8443 $PY -m pytest -q "$LAB/e2e" "$@"
 }
 
 stop() {
