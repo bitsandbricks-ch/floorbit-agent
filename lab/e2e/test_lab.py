@@ -19,7 +19,9 @@ def test_both_agents_are_connected_and_current(fb):
 
 
 def test_monitoring_goes_through_the_agent(fb):
-    health = eventually(lambda: (h := fb.get('/api/monitoring/health')).get('source') == 'agent' and h,
+    # The status monitor may have asked once before the agents were up, and answers "not
+    # connected" until it asks again (up to a minute later): wait for a good answer.
+    health = eventually(lambda: (h := fb.get('/api/monitoring/health')).get('source') == 'agent' and h['ok'] and h,
                         what='monitoring through the agent')
     assert health['ok'], health
 
