@@ -52,6 +52,10 @@ UDP and sends them on, the flows only as a summary.
   Port actions and SSH are not part of the agent today. When they come
   (bitsandbricks-ch/floorbit#474), each will be its own method with its own checks, and its
   credentials will be sent per call and never stored on the agent.
+- **Offer a plugin update that writes elsewhere:** a bundle runs only when its signature verifies
+  against a key built into the image. Before that, its id and version name folders under the
+  agent's state, so an offer whose id or version could be a path (`/some/dir`, `9/../../x`) is
+  ignored, and an offer the agent can't read waits instead of stopping the plugins' settings.
 - **Flood the agent:** at most `WORKERS` calls of one kind run at a time, and at most `MAX_WAITING`
   wait. Anything more gets a "busy" answer at once, so memory can't grow without end and one slow
   kind can't hold up the others.

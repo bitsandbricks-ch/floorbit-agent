@@ -19,6 +19,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -26,6 +27,10 @@ from pathlib import Path
 
 PROBATION = 300          # seconds a new version must stay healthy
 POLICIES = ('auto', 'approve', 'off')
+# An id and a version become folder names here, so an offer is only taken when neither can be a
+# path: an id of /some/dir or a version of 9/../../x put the scratch folder there, and a failed
+# download removed it.
+VERSION_RE = re.compile(r'^[0-9A-Za-z][0-9A-Za-z.+_-]{0,39}$')
 MAX_EVENTS = 20
 
 
@@ -145,9 +150,11 @@ class Updater:
             approved = set(self._read(self.approved_path, []))
             changed = False
             for pid, b in sorted(offered.items()):
-                if not isinstance(b, dict):
+                if not isinstance(b, dict) or not self.b.ID_RE.match(str(pid)):
                     continue
                 version = str(b.get('version') or '')
+                if '..' in version or not VERSION_RE.match(version):
+                    continue
                 entry = self.state.get(pid) or {}
                 if (not version or not self.b.newer(version, self.running_version(pid))
                         or version in (entry.get('bad') or [])):
@@ -155,7 +162,12 @@ class Updater:
                         entry['pending'] = None
                         changed = True
                     continue
-                if int(b.get('agent_api') or 1) > self._agent_api():
+                try:
+                    needs = int(b.get('agent_api') or 1)
+                except (TypeError, ValueError, OverflowError):
+                    # Raised here it stopped the whole pull, and the plugins' settings with it.
+                    needs = self._agent_api() + 1
+                if needs > self._agent_api():
                     self._mark_pending(pid, b, 'needs a newer agent image')
                     changed = True
                     continue

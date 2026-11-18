@@ -50,6 +50,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Security
 
+- A plugin update offered by the hosted Floorbit whose id or version could be a path (`/some/dir`, `9/../../x`) is ignored. Before, a failed download removed a folder of that name outside the agent's state. An offer with an `agent_api` that is not a number waits instead of stopping the plugins' settings from being applied.
 - The seat walk-through hello no longer redirects to a `back` address with a line break in it. Such an address passed the same-Floorbit check and split the response, so a link could set a cookie or add a page on the captive address.
 - The agent no longer follows redirects from the hosted Floorbit. Its key travels in its own header, which a redirect to another host (even plain http) took along. A redirect now says where it points, and the agent keeps trying.
 - A laptop on the hall network could make the agent send seat walk-through hellos to the hosted Floorbit as fast as it answered. One address now gets 10 hellos a minute; the rest get a 429 page without reaching Floorbit.
