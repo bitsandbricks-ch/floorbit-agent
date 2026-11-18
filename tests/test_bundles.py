@@ -220,6 +220,18 @@ def test_no_pinned_key_or_a_newer_agent_api_waits(hall):
     assert host.updater.report()["plugins"]["hallthing"]["pending"]["why"] == "needs a newer agent image"
 
 
+@pytest.mark.parametrize("api", ["2", [1], 1.5, True, None])
+def test_an_odd_agent_api_waits_and_never_stops_the_round(hall, api):
+    started, hosted, pem, _clock, tmp_path, _ = hall
+    host = started()
+    hosted.publish(tmp_path, pem, "0.6.0")
+    hosted.offer["hallthing"]["agent_api"] = api
+    hosted.etag += 1
+    host.pull()
+    assert runs(host) == "0.4.0"
+    assert host.updater.report()["plugins"]["hallthing"]["pending"]["why"] == "needs a newer agent image"
+
+
 def test_approve_on_the_agent(hall):
     started, hosted, pem, _clock, tmp_path, _ = hall
     host = started(policy="approve")

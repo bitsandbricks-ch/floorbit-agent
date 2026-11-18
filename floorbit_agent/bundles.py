@@ -165,7 +165,10 @@ class Updater:
                         entry['pending'] = None
                         changed = True
                     continue
-                if int(b.get('agent_api') or 1) > self._agent_api():
+                api = b.get('agent_api', 1)
+                # Anything but a whole number counts as an API this image doesn't know: never a crash
+                # that stops every other offer in this round.
+                if isinstance(api, bool) or not isinstance(api, int) or api > self._agent_api():
                     self._mark_pending(pid, b, 'needs a newer agent image')
                     changed = True
                     continue
