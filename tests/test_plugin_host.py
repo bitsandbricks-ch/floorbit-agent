@@ -67,6 +67,7 @@ class FakeHosted:
         self.post_status = 200
         self.config_status = 200
         self.asked_with = []
+        self.ha = None
 
     def get(self, url, params=None, headers=None, timeout=None):
         self.asked_with.append((headers or {}).get("If-None-Match"))
@@ -75,7 +76,8 @@ class FakeHosted:
                 return Resp(self.config_status)
             if (headers or {}).get("If-None-Match") == f'"{self.etag}"':
                 return Resp(304)
-            return Resp(200, {"plugins": self.plugins, "etag": self.etag})
+            return Resp(200, {"plugins": self.plugins, "etag": self.etag,
+                              **({"ha": self.ha} if self.ha is not None else {})})
         if url.endswith("/api/agent/v1/plugins/hallthing/seats"):
             return Resp(200, {"data": {"seat_of": {"192.0.2.10": "A1"}}})
         if "/api/agent/v1/plugins/" in url:
@@ -361,3 +363,41 @@ def test_a_latest_kind_keeps_only_the_newest_and_fetches_ask_the_hosted_part(set
         ctx.fetch("other")
     with pytest.raises(PluginError, match="does not list"):
         ctx.fetch("secrets")
+
+
+class FakeVrrp:
+    def __init__(self, first="MASTER"):
+        from floorbit_agent.vrrp import instance
+        self.states = {instance(1): first}
+
+
+def test_split_brain_the_hosted_side_names_who_polls(setup):
+    import floorbit_agent.plugin_host as ph
+    host, hosted, _agent, lines = setup
+    assert host.primary()                                  # no VRRP: always primary
+    host.vrrp = FakeVrrp("MASTER")
+    host.pull()
+    assert host.primary()                                  # an older Floorbit sends no "ha"
+    hosted.ha, hosted.etag = {"stand_by_for": "a1"}, "e2"
+    host.pull()
+    assert not host.primary()                              # both MASTER: the hosted side settles it
+    assert any("stands by" in line for line in lines)
+    assert host.pull() and not host.primary()              # 304 keeps the hint fresh
+    later = time.monotonic() + ph.HA_HINT_FRESH + 1
+    assert host.primary(now=later)                         # uplink gone too long: VRRP alone again
+    hosted.ha, hosted.etag = {}, "e3"
+    host.pull()
+    assert host.primary() and any("no longer standing by" in line for line in lines)
+    host.vrrp = FakeVrrp("BACKUP")
+    hosted.ha, hosted.etag = {"stand_by_for": "a1"}, "e4"
+    host.pull()
+    assert not host.primary()                              # a VRRP backup never polls anyway
+
+
+def test_a_bad_hint_is_ignored(setup):
+    host, hosted, _agent, _lines = setup
+    host.vrrp = FakeVrrp("MASTER")
+    for bad in ("a1", {"stand_by_for": 5}, {"stand_by_for": ""}, ["x"]):
+        hosted.ha, hosted.etag = bad, f"e-{bad!r}"
+        host.pull()
+        assert host.primary(), bad

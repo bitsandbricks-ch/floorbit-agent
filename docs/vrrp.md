@@ -30,6 +30,23 @@ both once. When the primary goes, the standby takes the first VIP and starts pol
 seconds. The hosted Local agents page shows each hall's primary, the VIPs each agent holds, and
 whether failover is ready. Without VRRP every agent counts as primary.
 
+### Split brain
+
+If the agents can't hear each other's VRRP (a switch drops the multicast, the link between them is
+cut), each takes every VIP and calls itself primary within a few seconds. Both would then poll the
+devices and try the logins. The hosted Floorbit hears both, so it settles it: with the plugin config
+the agents pull (asked again as soon as a primary changes), it tells all but the one with the
+smallest agent id to stand by. That agent keeps its VIPs and listeners but `ctx.primary()` says
+no, and it logs:
+
+```text
+[vrrp] split brain: another agent holds the first VIP too; the hosted Floorbit says <id> polls and logs in, so this one stands by
+```
+
+The word counts for three minutes after it was last heard: if the hosted side is out of reach that
+long too, VRRP alone decides again. Once the agents hear each other, the hint is gone with the next
+pull. `FLOORBIT_AGENT_VRRP_PEERS` (unicast VRRP) avoids most splits where switches drop multicast.
+
 ## Three ways to run it
 
 ### 1. keepalived in the agent image (simplest)
