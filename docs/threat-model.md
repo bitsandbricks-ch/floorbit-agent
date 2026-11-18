@@ -75,6 +75,12 @@ UDP and sends them on, the flows only as a summary.
   origin, so the endpoint is no open redirect, and its page escapes everything it shows.
 - **Flood the UDP ports:** the syslog backlog has a fixed size, the newest lines are dropped and
   counted (`floorbit_agent_syslog_dropped_total`), and memory stays bounded.
+- **Send broken or crafted flow packets:** a packet the collector can't read is skipped and counted;
+  the listener keeps running. Templates are capped, so made-up ones can't fill memory.
+- **Hold connections open** on the captive or metrics port: a connection that sends nothing for 10
+  seconds is closed, one address gets at most 16 at a time and the port 256, and the rest are closed
+  at once. Loopback is never refused, so keepalived's `/healthz` keeps answering during a flood. A
+  flood can make the captive note late for others; it can't take the agent down.
 - **Read the report:** the half-minute report to the hosted Floorbit carries the same kind of counts
   as `/metrics`, nothing more.
 - **Read `/metrics`:** it is only counts and timings, with no IPs, names, log lines or keys. When
