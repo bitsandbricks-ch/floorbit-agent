@@ -94,7 +94,10 @@ def test_the_seat_walk_hello_sends_the_laptop_back_only_to_its_floorbit():
     assert api.hello(CODE, "192.0.2.50", back) == (303, back, "")
     assert said == [(CODE, "192.0.2.50")]
     # Another host, or no back at all: a short page, never a redirect somewhere else.
-    for other in ("https://evil.example.net/seat-walk", "http://floor.example.com/seat-walk", ""):
+    for other in ("https://evil.example.net/seat-walk", "http://floor.example.com/seat-walk", "",
+                  # urlsplit drops line breaks before it compares: the header must not get them
+                  "https://floor.example.com/seat-walk\r\nSet-Cookie: x=1",
+                  "https://floor.example.com/\r\n\r\n<script>alert(1)</script>"):
         status, location, text = api.hello(CODE, "192.0.2.50", other)
         assert (status, location) == (200, None) and "192.0.2.50" in text
 
@@ -146,3 +149,22 @@ def test_the_agent_reports_the_hello_and_where_laptops_reach_it(monkeypatch):
     monkeypatch.setenv("FLOORBIT_AGENT_LAN_URL", "http://agent.lan.example.com:8908/")
     assert make(FakeHost()).lan_url == "http://agent.lan.example.com:8908"
     assert make(FakeHost()).report()["lan_url"] == "http://agent.lan.example.com:8908"
+
+
+def test_a_laptop_cannot_make_the_agent_flood_the_hosted_side_with_hellos():
+    said = []
+    api = captive.Captive(lambda: {"done": []}, log=quiet, say_hello=lambda code, ip: said.append(ip),
+                          floorbit_url="https://floor.example.com")
+    codes = [api.hello(CODE, "192.0.2.50", "", now=100.0 + n)[0] for n in range(25)]
+    assert codes == [200] * captive.HELLO_TRIES + [429] * (25 - captive.HELLO_TRIES)
+    assert len(said) == captive.HELLO_TRIES             # the refused ones never reached Floorbit
+    assert api.hello(CODE, "192.0.2.51", "", now=125.0)[0] == 200    # another laptop is not held up
+    assert api.hello(CODE, "192.0.2.50", "", now=100.0 + captive.HELLO_WINDOW + 30)[0] == 200
+
+
+def test_many_addresses_do_not_grow_the_hello_memory_without_end(monkeypatch):
+    monkeypatch.setattr(captive, "HELLO_ADDRESSES", 50)
+    api = captive.Captive(lambda: {"done": []}, log=quiet, say_hello=lambda code, ip: None)
+    for n in range(500):
+        api.hello(CODE, f"10.0.{n // 250}.{n % 250}", "", now=1.0)
+    assert len(api._hellos) <= 50

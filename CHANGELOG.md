@@ -39,12 +39,21 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- Syslog posts stay under 8 MB. 2000 long lines full of emoji or other non-ASCII came to 47 MB as JSON: the hosted Floorbit took none of a gzipped post (silently) and refused a plain one, which then blocked every line behind it.
+- `FLOORBIT_AGENT_BUFFER_MAX_MB=inf` (or `nan`, or `_MAX_HOURS` of 0) no longer stops the syslog relay from starting: the disk buffer is turned off with a clear message, and syslog runs with its lines kept in memory.
+- A call from the hosted Floorbit that the agent can't read (not an object, no id) is skipped and counted (`outcome="unreadable"`) instead of ending the long poll or the WebSocket link, which dropped the good calls behind it. A 426 whose body isn't JSON, such as a proxy's own page, now stops the agent with the protocol message instead of retrying forever.
+- The captive page and the metrics port no longer keep a thread per connection for ever: a connection that sends nothing for 10 seconds is closed, one address holds at most 16 at a time and the port 256 (loopback, where keepalived asks `/healthz`, is never refused). Before, one laptop in the hall could open thousands of idle connections and hold a thread and a file descriptor for each.
+- A NetFlow or IPFIX packet the collector can't read no longer stops the agent's flow listener for good (Traffic stayed empty until the agent restarted): it is skipped, logged and counted.
 - A burst of syslog no longer loses most of its lines: one thread reads the port instead of a thread per datagram, which kept only about a fifth of a 25,000-line-a-second burst. Syslog and NetFlow ask for an 8 MB receive buffer.
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
 - `/healthz` no longer reads as unhealthy when the clock steps back.
 
 ### Security
 
+- A plugin update offered by the hosted Floorbit whose id or version could be a path (`/some/dir`, `9/../../x`) is ignored. Before, a failed download removed a folder of that name outside the agent's state. An offer with an `agent_api` that is not a number waits instead of stopping the plugins' settings from being applied.
+- The seat walk-through hello no longer redirects to a `back` address with a line break in it. Such an address passed the same-Floorbit check and split the response, so a link could set a cookie or add a page on the captive address.
+- The agent no longer follows redirects from the hosted Floorbit. Its key travels in its own header, which a redirect to another host (even plain http) took along. A redirect now says where it points, and the agent keeps trying.
+- A laptop on the hall network could make the agent send seat walk-through hellos to the hosted Floorbit as fast as it answered. One address now gets 10 hellos a minute; the rest get a 429 page without reaching Floorbit.
 - Game server queries no longer go to link-local addresses (`169.254.169.254`, where clouds keep their metadata service): Python counts them as private, so they passed the private-only check.
 - Game queries and service probes check an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it reaches, also on Python releases that don't do so themselves.
 - Game queries and service probes also check the IPv4 address inside NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) and 6to4 (`2002::/16`) addresses: Python calls `64:ff9b:1::a9fe:a9fe` private, but on a NAT64 network it is the metadata service at `169.254.169.254`. Probes now refuse this machine and link-local addresses even when `FLOORBIT_AGENT_PROBE_NETS` would allow them.

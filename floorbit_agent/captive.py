@@ -28,14 +28,20 @@ import json
 import re
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections import deque
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlsplit
+
+from . import http_limits
 
 PATH = '/.well-known/captive-portal'
 HELLO_PATH = re.compile(r'^/floorbit/hello/([A-Za-z0-9_-]{16,64})$')
 KIND = 'application/captive+json'
 REFRESH = 30          # seconds between asks; a check-in shows up here within this
 RETRY = 10            # after a failed ask
+HELLO_TRIES = 10      # hellos per laptop address and minute: the crew needs one, a script many
+HELLO_WINDOW = 60
+HELLO_ADDRESSES = 4096   # addresses remembered; past that the quietest are forgotten
 
 
 def _ip(text):
@@ -59,6 +65,8 @@ class Captive:
         self.asked_at = None
         self.error = None
         self._stop = threading.Event()
+        self._hellos = {}                    # ip -> deque of time.monotonic() of its recent hellos
+        self._hello_lock = threading.Lock()
 
     def refresh(self, now=None):
         """Ask the hosted Floorbit once. Returns the seconds until the next ask."""
@@ -87,15 +95,39 @@ class Captive:
             return {'captive': False}
         return {'captive': True, 'user-portal-url': self.portal}
 
-    def hello(self, code, ip, back):
+    def _hello_allowed(self, ip, now=None):
+        """Each hello is a request to the hosted Floorbit: anyone on the hall network could
+        otherwise make the agent send them as fast as it answers."""
+        now = time.monotonic() if now is None else now
+        with self._hello_lock:
+            seen = self._hellos.get(ip)
+            if seen is None:
+                if len(self._hellos) >= HELLO_ADDRESSES:
+                    for old in [k for k, v in self._hellos.items() if not v or now - v[-1] >= HELLO_WINDOW]:
+                        del self._hellos[old]
+                    if len(self._hellos) >= HELLO_ADDRESSES:     # all busy: drop the oldest entry
+                        del self._hellos[next(iter(self._hellos))]
+                seen = self._hellos[ip] = deque()
+            while seen and now - seen[0] >= HELLO_WINDOW:
+                seen.popleft()
+            if len(seen) >= HELLO_TRIES:
+                return False
+            seen.append(now)
+            return True
+
+    def hello(self, code, ip, back, now=None):
         """The seat walk-through's hello: ``(status, location or None, text)``."""
         if self.say_hello is None:
             return 404, None, 'This agent does not take seat walk-through hellos.'
+        if not self._hello_allowed(ip, now):
+            return 429, None, 'Too many hellos from this laptop. Wait a minute, then try again.'
         try:
             self.say_hello(code, ip)
         except Exception as exc:  # noqa: BLE001  # the page says why, the crew tries again
             return 502, None, f'Floorbit did not take it: {exc}'
-        if back and self.floorbit_url:
+        # urlsplit drops tabs and line breaks before it looks, but send_header would not: a back
+        # with "\r\n" in it passed the check and split the response (a header or a page of its own).
+        if back and self.floorbit_url and not any(ord(c) < 32 or ord(c) == 127 for c in back):
             want, got = urlsplit(self.floorbit_url), urlsplit(back)
             if (got.scheme, got.netloc) == (want.scheme, want.netloc):
                 return 303, back, ''
@@ -126,6 +158,8 @@ def serve(captive, address, log=print):
     port = int(port)
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = http_limits.IDLE_SECONDS     # a phone that opens and says nothing lets go
+
         def do_GET(self):  # the name http.server asks for
             path, _, query = self.path.partition('?')
             hello = HELLO_PATH.match(path)
@@ -161,8 +195,7 @@ def serve(captive, address, log=print):
         def log_message(self, *args):   # every phone asks: not news
             pass
 
-    server = ThreadingHTTPServer((host or '0.0.0.0', port), Handler)
-    server.daemon_threads = True
+    server = http_limits.LimitedHTTPServer((host or '0.0.0.0', port), Handler, shared=captive.proxies)
     threading.Thread(target=server.serve_forever, name='agent-captive', daemon=True).start()
     threading.Thread(target=captive.run, name='agent-captive-refresh', daemon=True).start()
     log(f'[captive] Captive Portal API on http://{address}{PATH}')
