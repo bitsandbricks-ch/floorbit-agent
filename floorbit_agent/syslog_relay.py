@@ -50,6 +50,9 @@ class Relay:
         self.sent = 0
         self.received = 0
         self._lock = threading.Lock()
+        # One sender at a time: the last send on the way out raced the send thread, and both took
+        # the same lines from the left ("pop from an empty deque", the backlog spilled twice).
+        self._sending = threading.RLock()
         self._stop = threading.Event()
         self._server = None
         self._failing = False
@@ -81,12 +84,13 @@ class Relay:
         """Move what waits in memory to the disk buffer, oldest first, a batch per file."""
         if self.spool is None:
             return
-        while True:
-            with self._lock:
-                batch = [self.lines.popleft() for _ in range(min(BATCH, len(self.lines)))]
-            if not batch:
-                return
-            self.spool.put(batch)
+        with self._sending:
+            while True:
+                with self._lock:
+                    batch = [self.lines.popleft() for _ in range(min(BATCH, len(self.lines)))]
+                if not batch:
+                    return
+                self.spool.put(batch)
 
     def flush_once(self):
         """Send what waits: the live lines first, then up to REPLAY batches from the disk buffer.
@@ -119,6 +123,10 @@ class Relay:
         return total
 
     def _send_live(self):
+        with self._sending:
+            return self._send_live_locked()
+
+    def _send_live_locked(self):
         total = 0
         while True:
             with self._lock:

@@ -8,6 +8,10 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- `plugin_test`: the hosted Settings > Plugins > Test button for a plugin that reaches the event network runs here, where the plugin runs.
+- `FLOORBIT_AGENT_KEY_FILE`: the key from a file. Floorbit, which now reaches the event network only through an agent also when self-hosted, writes it for the agent next to it (its `docker-compose.yml` and Kubernetes manifest) and enrols it itself; the agent waits up to two minutes for the file.
+- The attendee front door (`FLOORBIT_AGENT_FRONT_DOOR`): the hosted Floorbit's pages served on the event network, each request with the PC's own address and the agent's key, so check-in, the seat help page and the sign-in limits work behind the hall's NAT. The seat speed test is answered here and measures the hall. A short English and German page shows while the hosted side is away. Counts in `/metrics` and the report.
+- Switch SSH for a hosted Floorbit (`switch_call`, `shell_open`, `shell_io`, `shell_close`): port actions, switch commands, config backups and the switch terminal are opened here, in the hall, with the SSH port actions plugin the hosted Floorbit turned on. Only private addresses, or `FLOORBIT_AGENT_SWITCH_NETS`; the login comes with each call and is cleared after it; host keys stay pinned on the hosted side. Terminals live here (at most 10) and close after 90 seconds nobody reads them.
 - The crew's seat walk-through works with a hosted Floorbit or one behind NAT: the captive port answers `/floorbit/hello/<code>`, reports the crew laptop's own IP with the page's one-time code and sends the browser back to Floorbit. `FLOORBIT_AGENT_LAN_URL` tells Floorbit where laptops in the hall reach it. The test lab walks a seat block this way.
 - A test lab (`lab/`, `docs/lab/`): a hosted Floorbit, two agents, a lab LibreNMS and a simulated event network (a Nexus core, a Catalyst 4500, four 2960-X, two OPNsense firewalls, a LAN cache) with syslog, traps and NetFlow on a loop, and end-to-end tests from seat lookup and check-in to agent failover. CI runs it on every pull request. `docs/lab/capture.md` lists what to record from real gear, and `lab/tools/anonymise.py` strips it before it is shared.
 - Device telemetry without LibreNMS: with Floorbit's Telemetry plugin turned on, the agent is the collector. A Telegraf sidecar (`docker compose --profile telemetry up -d`) polls SNMP, takes traps, gNMI and Cisco model-driven telemetry, and sends to the agent on port 8186; the agent also asks NX-API, RESTCONF and the OPNsense API. The hosted Floorbit gets the per-port and per-device numbers, and which MAC with which IP is on which port for its IP and MAC history. How the collector is doing shows on the Local agents page.
@@ -34,11 +38,14 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
+- Built for a 1,000-switch hall: 16 seat lookups run side by side (was 3), with more room for SSH and port calls, and the NetFlow socket is read in its own thread, away from writing the raw files and the minute's summary, so a busy summary no longer loses datagrams.
 - Built and tested on Floorbit with the night's work in it (`FLOORBIT_REF`).
 - The work from #8 to #15 reaches `main`: those pull requests were merged into stack branches that had already gone in.
 
 ### Fixed
 
+- Stopping the agent while it was sending syslog could fail with "pop from an empty deque" and keep the waiting lines on disk twice.
+- A syslog batch the hosted Floorbit refuses as too big is sent again in halves instead of blocking the lines behind it; a single line still too big is skipped and logged.
 - A burst of syslog no longer loses most of its lines: one thread reads the port instead of a thread per datagram, which kept only about a fifth of a 25,000-line-a-second burst. Syslog and NetFlow ask for an 8 MB receive buffer.
 - A heartbeat file that can't be written (a full disk) no longer turns the heartbeat off for good: the agent keeps trying and says so once.
 - `/healthz` no longer reads as unhealthy when the clock steps back.

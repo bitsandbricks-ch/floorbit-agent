@@ -318,7 +318,7 @@ def test_the_agent_reports_about_itself_over_the_link():
     assert way == "link"
     assert set(report) == {"up_seconds", "reconnects", "link_drops", "calls_busy", "answers_failed",
                            "syslog_received", "syslog_sent", "syslog_dropped", "syslog_backlog", "flows_packets",
-                           "captive_shown", "captive_done"}
+                           "captive_shown", "captive_done", "front_door_passed", "front_door_failed"}
     assert all(isinstance(v, (int, float)) and v >= 0 for v in report.values())
 
 
@@ -356,3 +356,21 @@ def test_the_report_sums_busy_calls_and_failed_answers_over_methods():
     a.metrics.inc("floorbit_agent_answers_total", {"way": "failed"}, by=2)
     report = a.report()
     assert report["calls_busy"] == 4 and report["answers_failed"] == 2
+
+
+def test_a_syslog_batch_too_big_for_the_hosted_side_goes_in_halves():
+    # The hosted side refuses a body over its limit out loud (413). Sent again whole, the batch
+    # would block the backlog behind it for good.
+    class Small(FakeHost):
+        def post(self, url, data=None, headers=None, timeout=None):
+            super().post(url, data, headers, timeout)
+            lines = self.posts[-1][2]["lines"]
+            if any(len(line["raw"]) > 1000 for line in lines) or len(lines) > 4:
+                return Resp(413, {"error": "The agent sent more than 32 MB at once; send it in parts."})
+            return Resp(200, {"taken": len(lines)})
+    host = Small()
+    a = make(host)
+    lines = [{"raw": f"<14>line {i}", "from": "192.0.2.9"} for i in range(10)]
+    assert a.send_syslog(lines)["taken"] == 10
+    huge = [*lines[:3], {"raw": "<14>" + "x" * 2000, "from": "192.0.2.9"}]
+    assert a.send_syslog(huge)["taken"] == 3       # the one line still too big is skipped
