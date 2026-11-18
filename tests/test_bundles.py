@@ -8,6 +8,7 @@ import pytest
 from floorbit.plugins import bundles
 
 import floorbit_agent as agent_mod
+from floorbit_agent import bundles as agent_bundles
 from floorbit_agent.bundles import Updater, cli
 from floorbit_agent.plugin_host import PluginHost
 
@@ -336,3 +337,12 @@ def test_an_offer_with_a_path_in_it_touches_nothing(hall, pid, version, file):
     assert runs(host) == "0.4.0"
     assert canary.exists()
     assert any("bad id, version or file" in line for line in lines)
+
+
+@pytest.mark.parametrize('regex, value', [
+    (agent_bundles.ID_RE, 'lancache\n'), (agent_bundles.VERSION_RE, '1.0.0\n'),
+    (agent_bundles.FILE_RE, 'lancache-1.0.0.tar.gz\n'),
+])
+def test_a_trailing_newline_is_no_valid_name(regex, value):
+    # "$" matches before a final newline; these names become folders on the agent.
+    assert regex.match(value) is None and regex.match(value.strip())

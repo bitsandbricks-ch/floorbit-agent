@@ -26,7 +26,7 @@ from typing import NamedTuple
 STATES = ('MASTER', 'BACKUP', 'FAULT', 'STOP')
 PREFERRED, OTHER = 150, 100        # priorities: the preferred holder wins while it is up
 CHECK_EVERY = 2                    # seconds between health checks
-_IFACE = re.compile(r'^[A-Za-z0-9_.:@-]{1,15}$')
+_IFACE = re.compile(r'^[A-Za-z0-9_.:@-]{1,15}\Z')
 
 
 class Settings(NamedTuple):

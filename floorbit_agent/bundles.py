@@ -30,9 +30,9 @@ POLICIES = ('auto', 'approve', 'off')
 MAX_EVENTS = 20
 # What the hosted side offers becomes folder names here: only these shapes, so a stolen hosted
 # login can't point an install (and its clean-up) at another folder ("../../...").
-ID_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}$')
-VERSION_RE = re.compile(r'^[0-9][0-9A-Za-z.+-]{0,39}$')
-FILE_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}-[0-9][0-9A-Za-z.+-]{0,39}\.tar\.gz$')
+ID_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}\Z')
+VERSION_RE = re.compile(r'^[0-9][0-9A-Za-z.+-]{0,39}\Z')
+FILE_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}-[0-9][0-9A-Za-z.+-]{0,39}\.tar\.gz\Z')
 
 
 def policy(env):
