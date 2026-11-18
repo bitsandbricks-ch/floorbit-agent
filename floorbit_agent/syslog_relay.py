@@ -16,6 +16,7 @@ heard it, so the hosted side can keep one copy when two agents, or a replay, sen
 """
 import contextlib
 import hashlib
+import json
 import socket
 import threading
 import time
@@ -25,6 +26,9 @@ MAX_LINE = 2048          # as floorbit/syslog.py
 BACKLOG = 20_000
 RECEIVE_BUFFER = 8 * 1024 ** 2   # bytes asked of the kernel (capped at net.core.rmem_max)
 BATCH = 2000             # the hosted side takes at most this many per post
+BATCH_BYTES = 8 * 1024 ** 2   # and a post stays well under its 32 MB: 2000 long lines of emoji
+                              # come to 47 MB as JSON, which it refused (413) or, gzipped, took as
+                              # empty, losing them all
 EVERY = 2.0              # seconds between sends while lines come in
 REPLAY = 5               # buffered batches per round once the hosted side is back: the backlog
                          # catches up at 5,000 lines a second without crowding out live lines
@@ -50,6 +54,9 @@ class Relay:
         self.sent = 0
         self.received = 0
         self._lock = threading.Lock()
+        # One sender at a time: the last send on the way out raced the send thread, and both took
+        # the same lines from the left ("pop from an empty deque", the backlog spilled twice).
+        self._sending = threading.RLock()
         self._stop = threading.Event()
         self._server = None
         self._failing = False
@@ -77,16 +84,27 @@ class Relay:
     def buffered(self):
         return len(self.spool) if self.spool is not None else 0
 
+    def _batch_size(self):
+        """How many of the oldest lines make one post: up to BATCH, and BATCH_BYTES as JSON (at
+        least one, which MAX_LINE keeps far below it). Call with the lock held."""
+        size = 0
+        for n in range(min(BATCH, len(self.lines))):
+            size += len(json.dumps(self.lines[n])) + 1
+            if size > BATCH_BYTES and n:
+                return n
+        return min(BATCH, len(self.lines))
+
     def spill(self):
         """Move what waits in memory to the disk buffer, oldest first, a batch per file."""
         if self.spool is None:
             return
-        while True:
-            with self._lock:
-                batch = [self.lines.popleft() for _ in range(min(BATCH, len(self.lines)))]
-            if not batch:
-                return
-            self.spool.put(batch)
+        with self._sending:
+            while True:
+                with self._lock:
+                    batch = [self.lines.popleft() for _ in range(self._batch_size())]
+                if not batch:
+                    return
+                self.spool.put(batch)
 
     def flush_once(self):
         """Send what waits: the live lines first, then up to REPLAY batches from the disk buffer.
@@ -119,10 +137,14 @@ class Relay:
         return total
 
     def _send_live(self):
+        with self._sending:
+            return self._send_live_locked()
+
+    def _send_live_locked(self):
         total = 0
         while True:
             with self._lock:
-                batch = [self.lines[i] for i in range(min(BATCH, len(self.lines)))]
+                batch = [self.lines[i] for i in range(self._batch_size())]
                 dropped = self.all_dropped
             if not batch:
                 return total

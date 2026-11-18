@@ -19,7 +19,9 @@ import json
 import math
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+
+from . import http_limits
 
 BUCKETS = (0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60)
 
@@ -51,6 +53,12 @@ HELP = {
     'floorbit_agent_flows_packets_total': ('counter', 'NetFlow/IPFIX packets received from the event network.'),
     'floorbit_agent_flows_snapshots_sent_total': ('counter', 'Flow snapshots sent to the hosted Floorbit.'),
     'floorbit_agent_flows_failing': ('gauge', '1 while sending flow snapshots fails.'),
+    'floorbit_agent_captive_answers_total': ('counter', 'Captive portal answers, by answer '
+                                             '(captive: the note shows, done: it does not).'),
+    'floorbit_agent_captive_checked_in': ('gauge',
+                                          'Clients the last list from the hosted Floorbit counts as checked in.'),
+    'floorbit_agent_captive_list_age_seconds': ('gauge', 'Seconds since the hosted Floorbit last sent the list.'),
+    'floorbit_agent_captive_failing': ('gauge', '1 while asking the hosted Floorbit for the list fails.'),
 }
 
 
@@ -163,9 +171,16 @@ class _Timer:
         return False
 
 
-def relay_collector(syslog=None, flows=None):
+def relay_collector(syslog=None, flows=None, captive=None):
     """Gauges and counters from the relays' own numbers (they count for themselves)."""
     def collect(m):
+        if captive:
+            for answer, n in dict(captive.asked).items():
+                m.set('floorbit_agent_captive_answers_total', n, {'answer': answer})
+            m.set('floorbit_agent_captive_checked_in', len(captive.done))
+            if captive.asked_at:
+                m.set('floorbit_agent_captive_list_age_seconds', round(max(0.0, time.time() - captive.asked_at), 1))
+            m.set('floorbit_agent_captive_failing', int(bool(captive.error)))
         if syslog:
             m.set('floorbit_agent_syslog_received_total', getattr(syslog, 'received', 0))
             m.set('floorbit_agent_syslog_sent_total', syslog.sent)
@@ -214,6 +229,8 @@ def serve(metrics, agent, address, healthy_for, token=None, log=print):
         return None
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = http_limits.IDLE_SECONDS
+
         def _send(self, status, body, kind):
             data = body.encode()
             self.send_response(status)
@@ -245,7 +262,7 @@ def serve(metrics, agent, address, healthy_for, token=None, log=print):
             pass
 
     try:
-        server = ThreadingHTTPServer((host or '0.0.0.0', port), Handler)
+        server = http_limits.LimitedHTTPServer((host or '0.0.0.0', port), Handler)
     except OSError as exc:
         log(f'[agent] cannot serve metrics on {address}: {exc}')
         return None

@@ -28,6 +28,8 @@ services:
     #   - "8186:8186"
     # The Captive Portal API (FLOORBIT_AGENT_CAPTIVE=0.0.0.0:8908), for the event's HTTPS reverse proxy:
     #   - "8908:8908"
+    # The attendee front door (FLOORBIT_AGENT_FRONT_DOOR=0.0.0.0:8443): check-in and the seat speed test:
+    #   - "443:8443"
     # A refused key (revoked or wrong) stops the agent with exit code 1: don't restart it into
     # the same refusal every few seconds. Network trouble doesn't stop it; it retries by itself.
     restart: on-failure:3

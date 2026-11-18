@@ -95,6 +95,8 @@ laptops show a quiet "sign in to network" note until their seat has checked in. 
 blocked. See Floorbit's
 [docs/integrations.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/integrations.md#the-sign-in-to-network-note-captive-portal-api).
 With VRRP, point option 114 at a virtual IP, so the note keeps working when one agent is down.
+`/metrics` counts the answers (`floorbit_agent_captive_answers_total`, by `captive` or `done`) and says
+how many clients the last list counts as checked in and how old that list is; never an IP.
 
 The same port answers the crew's seat walk-through (Floorbit's
 [docs/seat-walk.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/seat-walk.md)): a

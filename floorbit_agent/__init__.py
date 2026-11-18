@@ -18,6 +18,7 @@ import contextlib
 import gzip
 import io
 import json
+import math
 import os
 import pathlib
 import signal
@@ -29,6 +30,8 @@ from concurrent.futures import ThreadPoolExecutor
 KEY_HEADER = 'Floorbit-Agent-Key'
 VERSION_HEADER = 'Floorbit-Agent-Version'
 PROTOCOL_HEADER = 'Floorbit-Agent-Protocol'
+# Our clock on every request: the hosted side puts our times right when this box has no NTP.
+CLOCK_HEADER = 'Floorbit-Agent-Clock'
 PROTOCOL = 2              # the newest agent protocol this agent speaks; the hosted side says which it does
 LINK_IDLE = 60            # the hosted side sends something at least every 20 s: quiet this long, it's gone
 LINK_RETRY = 300          # after the link failed, long-poll this long before trying it again
@@ -46,7 +49,16 @@ REPORT_EVERY = 30         # seconds between reports to the hosted side (its Loca
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
-           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe', 'plugin', 'plugins_reload')
+           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe', 'plugin', 'plugins_reload',
+           'switch_call', 'shell_open', 'shell_io', 'shell_close', 'plugin_test')
+# Pools bigger than WORKERS: a switch command runs on many switches at once, and each open terminal
+# keeps one shell_io read waiting on the switch. Seat lookups come in bursts when doors open (a
+# whole hall checks in): with 3 at a time a 400-switch event managed 14 a second, and calls queued
+# past the hosted side's timeout. LibreNMS takes 16 side by side easily (3 requests each).
+LOOKUP_WORKERS = 16
+POOL_SIZES = {'switch_call': 8, 'shell_open': 4, 'shell_io': 24,
+              'resolve_ip': LOOKUP_WORKERS, 'arp': LOOKUP_WORKERS, 'port_stats': LOOKUP_WORKERS,
+              'device_details': 8}
 
 
 def _within(seconds, open_it, late=None):
@@ -79,6 +91,15 @@ def _within(seconds, open_it, late=None):
     if 'error' in out:
         raise out['error']
     return out['value']
+
+
+def _error_of(resp):
+    """The ``error`` of a JSON answer, or None when it is not JSON (a proxy's own page)."""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    return body.get('error') if isinstance(body, dict) else None
 
 
 class Refused(RuntimeError):
@@ -114,13 +135,23 @@ def game_target(host, env=None):
     """The address to ask a game server at, if it may be asked. The hosted side names the host, so
     the agent only reaches private addresses (or FLOORBIT_AGENT_GAME_NETS): a hosted Floorbit that
     was taken over can't use the agent to reach the internet or this machine's own ports."""
+    return _private_target(host, 'FLOORBIT_AGENT_GAME_NETS', 'ask game servers on', env)
+
+
+def switch_target(host, env=None):
+    """The address to open a switch login to (switches.py): private addresses only, or
+    FLOORBIT_AGENT_SWITCH_NETS, for the same reason as game servers."""
+    return _private_target(host, 'FLOORBIT_AGENT_SWITCH_NETS', 'log in to switches on', env)
+
+
+def _private_target(host, nets_var, what, env=None):
     import ipaddress
     import socket
 
     from floorbit.plugins.base import PluginError
     env = os.environ if env is None else env
     nets = [ipaddress.ip_network(n.strip(), strict=False)
-            for n in (env.get('FLOORBIT_AGENT_GAME_NETS') or '').split(',') if n.strip()]
+            for n in (env.get(nets_var) or '').split(',') if n.strip()]
     try:
         addrs = {info[4][0] for info in socket.getaddrinfo(str(host), None, proto=socket.IPPROTO_TCP)}
     except (OSError, UnicodeError):
@@ -132,8 +163,8 @@ def game_target(host, env=None):
         inside = _inside(ip)
         if any(ip in net for net in nets) if nets else (ip.is_private and (inside is None or inside.is_private)):
             return str(ip)
-    raise PluginError(f'{host} is not on a network the agent may ask game servers on '
-                      '(private addresses, or FLOORBIT_AGENT_GAME_NETS).')
+    raise PluginError(f'{host} is not on a network the agent may {what} '
+                      f'(private addresses, or {nets_var}).')
 
 
 def game_call(method, args, env=None):
@@ -198,6 +229,18 @@ def probe_call(method, args, env=None):
         raise PluginError('The probe was asked for wrongly.') from None
 
 
+def plugin_test(registry, args):
+    """Settings > Plugins > Test for a plugin that reaches the event network: run here, where it
+    runs, not on the hosted side."""
+    from floorbit.plugins.base import PluginError
+    plugin_id = str(args[0]) if args else ''
+    spec = registry.active(plugin_id) if registry is not None else None
+    if spec is None:
+        raise PluginError(f'{plugin_id} is not on on the agent yet. It turns on with the settings from the '
+                          'hosted Floorbit within a minute.')
+    return str(registry.call(spec, 'test') or 'OK')[:500]
+
+
 def local_executor(app, plugins_ref=None):
     """Run a call against this machine's monitoring plugin, as the hosted Floorbit would locally.
     ``plugins_ref["host"]``: the PluginHost, for the ``plugin`` calls."""
@@ -206,12 +249,18 @@ def local_executor(app, plugins_ref=None):
     def execute(method, args):
         from floorbit import sources
         from floorbit.plugins.base import PluginError
+
+        from . import switches
         if method not in METHODS:
             raise PluginError(f'{method} is not something the agent answers')
         if method in ('game_query', 'game_rcon'):
             return game_call(method, args)
         if method in ('dns_probe', 'tcp_probe'):
             return probe_call(method, args)
+        if method == 'shell_io':          # no app context: it only reads and writes an open shell
+            return switches.shells.io(args)
+        if method == 'shell_close':
+            return switches.shells.close(args)
         if method in ('plugin', 'plugins_reload'):
             host = plugins_ref.get('host')
             if host is None:
@@ -229,6 +278,12 @@ def local_executor(app, plugins_ref=None):
                 return wifi_feeds(registry)
             if method == 'dns_feeds':
                 return dns_feeds(registry, *args)
+            if method == 'switch_call':
+                return switches.call(registry, args)
+            if method == 'shell_open':
+                return switches.shells.open(registry, args)
+            if method == 'plugin_test':
+                return plugin_test(registry, args)
             if method == 'health_feeds':
                 return _feeds(registry, registry.feeders('health') if registry is not None else [], 'health_checks')
             spec = registry.monitoring_source() if registry is not None else None
@@ -309,6 +364,17 @@ def _feeds(registry, specs, method):
     return out
 
 
+def _no_redirects(requests):
+    """A session that never follows a redirect. The key goes in our own header, and requests only
+    drops ``Authorization`` on a redirect to another host: a hosted side (or whatever answers in
+    its name) that redirects would get the key sent on, even to plain http."""
+    class Session(requests.Session):
+        def request(self, method, url, **kwargs):
+            kwargs['allow_redirects'] = False
+            return super().request(method, url, **kwargs)
+    return Session()
+
+
 class Agent:
     def __init__(self, url, key, execute, http=None, version='0', log=print):
         import requests
@@ -316,7 +382,7 @@ class Agent:
         self.lan_url = os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
         self.key = key
         self.execute = execute
-        self.http = http or requests.Session()
+        self.http = http or _no_redirects(requests)
         self.version = version
         self.log = log
         self._pools = {}          # method -> its own ThreadPoolExecutor
@@ -353,7 +419,8 @@ class Agent:
             m.set('floorbit_agent_last_contact_age_seconds', round(time.time() - self.last_contact, 1))
 
     def _headers(self, json_body=False):
-        h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(self.protocol)}
+        h = {KEY_HEADER: self.key, VERSION_HEADER: self.version, PROTOCOL_HEADER: str(self.protocol),
+             CLOCK_HEADER: f'{time.time():.3f}'}
         if json_body:
             h['Content-Type'] = 'application/json'
         return h
@@ -364,7 +431,12 @@ class Agent:
                           'Enrol the agent again.')
         if resp.status_code == 426:
             # Retrying won't help: one of the two has to be updated.
-            raise Refused((resp.json() or {}).get('error') or 'The hosted Floorbit speaks another agent protocol.')
+            raise Refused(_error_of(resp) or 'The hosted Floorbit speaks another agent protocol.')
+        if 300 <= resp.status_code < 400:
+            where = resp.headers.get('Location') or 'somewhere else'
+            # Not Refused: a maintenance page may redirect for a while, so keep trying.
+            raise RuntimeError(f'The hosted Floorbit redirects to {where}. The agent does not follow redirects, '
+                          'its key would go along: set FLOORBIT_URL to the address the hosted Floorbit has now.')
         resp.raise_for_status()
         return resp.json()
 
@@ -414,6 +486,8 @@ class Agent:
                 self.beat()
                 self.last_contact = time.time()
                 message = json.loads(raw)
+                if not isinstance(message, dict):
+                    continue          # nothing a Floorbit sends: not worth dropping the link for
                 if message.get('type') == 'calls':
                     for call in message.get('calls') or []:
                         self.take(call)
@@ -452,6 +526,8 @@ class Agent:
             'syslog_dropped': m.get('floorbit_agent_syslog_dropped_total'),
             'syslog_backlog': m.get('floorbit_agent_syslog_backlog'),
             'flows_packets': m.get('floorbit_agent_flows_packets_total'),
+            'front_door_passed': m.total('floorbit_agent_front_door_requests_total', outcome='passed'),
+            'front_door_failed': m.total('floorbit_agent_front_door_requests_total', outcome='failed'),
             # Where laptops in the hall reach this agent, for Floorbit's seat walk-through.
             **({'lan_url': self.lan_url} if self.lan_url else {}),
             **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
@@ -459,6 +535,8 @@ class Agent:
                if getattr(self.plugins, 'updater', None) is not None else {}),
             **({'vrrp': {'primary': self.plugins.primary(), 'holds': self.plugins.vrrp.holds()}}
                if getattr(self.plugins, 'vrrp', None) else {}),
+            'captive_shown': m.get('floorbit_agent_captive_answers_total', {'answer': 'captive'}),
+            'captive_done': m.get('floorbit_agent_captive_answers_total', {'answer': 'done'}),
         }
 
     def _report_due(self, now=None):
@@ -502,6 +580,11 @@ class Agent:
 
     def take(self, call):
         """Queue one call in its method's pool, or answer "busy" when too many of that kind wait."""
+        if not isinstance(call, dict) or not isinstance(call.get('id'), (str, int)):
+            # No id: nothing to answer to. Skipped here, one odd call doesn't end the poll or the link.
+            self.metrics.inc('floorbit_agent_calls_total', {'method': 'other', 'outcome': 'unreadable'})
+            self.log(f'[agent] skipped a call it cannot read: {str(call)[:120]!r}')
+            return
         method = call.get('method') if call.get('method') in METHODS else 'other'
         with self._running_lock:
             if self._waiting.get(method, 0) >= MAX_WAITING:
@@ -511,7 +594,8 @@ class Agent:
                 self._waiting[method] = self._waiting.get(method, 0) + 1
                 pool = self._pools.get(method)
                 if pool is None:
-                    pool = self._pools[method] = ThreadPoolExecutor(WORKERS, thread_name_prefix=f'agent-{method}')
+                    pool = self._pools[method] = ThreadPoolExecutor(POOL_SIZES.get(method, WORKERS),
+                                                                    thread_name_prefix=f'agent-{method}')
         if busy:
             self.metrics.inc('floorbit_agent_calls_total', {'method': method, 'outcome': 'busy'})
             self._answer(call, {'id': call.get('id'), 'ok': False,
@@ -561,13 +645,23 @@ class Agent:
         from .syslog_relay import TurnedOff
         resp = self._post('/api/agent/v1/syslog', {'lines': lines, 'dropped': dropped})
         if resp.status_code == 409:
-            raise TurnedOff((resp.json() or {}).get('error') or 'Syslog is turned off on the hosted Floorbit.')
+            raise TurnedOff(_error_of(resp) or 'Syslog is turned off on the hosted Floorbit.')
+        if resp.status_code == 413:
+            # Too big for the hosted side: halves, so one batch of huge lines can't block the
+            # backlog behind it for good. A single line that's still too big is skipped and said.
+            if len(lines) > 1:
+                half = len(lines) // 2
+                first = self.send_syslog(lines[:half], dropped) or {}
+                second = self.send_syslog(lines[half:]) or {}
+                return {'taken': (first.get('taken') or 0) + (second.get('taken') or 0)}
+            self.log('[agent] skipped a syslog line the hosted Floorbit refused as too big')
+            return {'taken': 0}
         return self._check(resp)
 
     def _said(self, resp):
         """409: the hosted side has the feature off, and says so."""
         if resp.status_code == 409:
-            raise RuntimeError((resp.json() or {}).get('error') or 'turned off on the hosted Floorbit')
+            raise RuntimeError(_error_of(resp) or 'turned off on the hosted Floorbit')
         return self._check(resp)
 
     def flow_seats(self):
@@ -583,7 +677,7 @@ class Agent:
         """The crew laptop with this walk-through code is at ``ip`` (captive.py's hello)."""
         resp = self._post('/api/agent/v1/seat-walk', {'token': token, 'ip': ip})
         if resp.status_code == 404:
-            raise RuntimeError((resp.json() or {}).get('error') or 'this Floorbit has no seat walk-through')
+            raise RuntimeError(_error_of(resp) or 'this Floorbit has no seat walk-through')
         return self._check(resp)
 
     def send_flows(self, snapshot):
@@ -610,6 +704,8 @@ class Agent:
 
     def stop(self):
         self._stop.set()
+        from .switches import shells
+        shells.close_all()          # an SSH session must not outlive the agent
         for pool in list(self._pools.values()):
             pool.shutdown(wait=False, cancel_futures=True)
         ws = self._ws
@@ -780,7 +876,11 @@ def open_buffer(kind, env, out=print):
         max_mb = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_MB') or 2048)
         max_hours = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_HOURS') or 24)
     except ValueError:
-        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers; no disk buffer')
+        max_mb = max_hours = math.nan
+    # "inf" or "nan" passed float() and then broke int() below, which took the syslog relay down
+    # with it; no hours or fewer would drop every record the moment it is written.
+    if not (math.isfinite(max_mb) and math.isfinite(max_hours) and max_hours > 0):
+        out('[agent] FLOORBIT_AGENT_BUFFER_MAX_MB and _MAX_HOURS must be numbers (hours above 0); no disk buffer')
         return None
     if max_mb <= 0:
         return None
@@ -827,6 +927,38 @@ def start_captive(agent, env, out=print):
         out(f'[captive] cannot answer on "{address}" (host:port): {exc}')
         return False
     return _Served(server, api)
+
+
+def start_front_door(agent, env, out=print):
+    """The attendee front door (front_door.py), when FLOORBIT_AGENT_FRONT_DOOR is set; as start_syslog."""
+    from . import front_door
+    address = env.get('FLOORBIT_AGENT_FRONT_DOOR', '').strip()
+    if not address or address.lower() == 'off':
+        return None
+    door = front_door.FrontDoor(agent.url, agent.key, proxies=[
+        p for p in env.get('FLOORBIT_AGENT_FRONT_DOOR_PROXIES', '').split(',') if p.strip()], log=out)
+    try:
+        context = front_door.tls_context(env)
+        server = front_door.serve(door, address, context)
+    except (ValueError, OSError, OverflowError) as exc:
+        out(f'[front door] cannot answer on "{address}" (host:port, and the TLS certificate if set): {exc}')
+        return False
+
+    def numbers(m):
+        for outcome, n in dict(door.counts).items():
+            m.set('floorbit_agent_front_door_requests_total', n, {'outcome': outcome})
+        m.set('floorbit_agent_front_door_open', door.open)
+    agent.metrics.collect(numbers)
+    out(f'[front door] serving the hosted Floorbit\'s pages on {"https" if context else "http"}://{address}')
+    return _Server(server)
+
+
+class _Server:
+    def __init__(self, server):
+        self.server = server
+
+    def stop(self):
+        self.server.shutdown()
 
 
 class _Served:
@@ -926,6 +1058,35 @@ def health(path=None, now=None, out=print):
     return 0
 
 
+KEY_FILE_WAIT = 120     # seconds: Floorbit next to us writes the file when it starts
+
+
+def key_from_file(path, wait=KEY_FILE_WAIT, sleep=time.sleep):
+    """The key from ``FLOORBIT_AGENT_KEY_FILE``: a self-hosted Floorbit writes it into a volume the
+    two share (its docker-compose.yml) and enrols the agent itself. Waits for the file to appear."""
+    path = str(path or '').strip()
+    if not path:
+        return ''
+    deadline = time.monotonic() + wait
+    told = False
+    while True:
+        try:
+            with open(path, encoding='utf-8') as f:
+                key = f.read().strip()
+            if key:
+                return key
+        except OSError:
+            pass
+        if time.monotonic() >= deadline:
+            print(f'[agent] {path} did not appear: is Floorbit running with FLOORBIT_LOCAL_AGENT_KEY_FILE?',
+                  file=sys.stderr)
+            return ''
+        if not told:
+            print(f'[agent] waiting for Floorbit to write the key to {path}', flush=True)
+            told = True
+        sleep(1)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] not in ('check', 'run', 'health', 'plugins'):
@@ -939,11 +1100,14 @@ def main(argv=None):
         from .bundles import cli
         return cli(argv[1:], state_root())
     url = os.environ.get('FLOORBIT_URL', '').strip()
-    key = os.environ.get('FLOORBIT_AGENT_KEY', '').strip()
+    key = (os.environ.get('FLOORBIT_AGENT_KEY', '').strip()
+           or key_from_file(os.environ.get('FLOORBIT_AGENT_KEY_FILE', '')))
     if not url or not key:
         print('Set FLOORBIT_URL (the hosted Floorbit) and FLOORBIT_AGENT_KEY (from Settings > Local agents).',
               file=sys.stderr)
         return 2
+    # Floorbit's plugins only reach the event network in a process that has the agent key.
+    os.environ['FLOORBIT_AGENT_KEY'] = key
     if not url.startswith('https://') and os.environ.get('FLOORBIT_AGENT_INSECURE') != '1':
         print('FLOORBIT_URL must start with https://: the key and the event data go over it. '
               'For a test on a trusted network, set FLOORBIT_AGENT_INSECURE=1.', file=sys.stderr)
@@ -973,9 +1137,10 @@ def main(argv=None):
         return 0 if good else 1
     relays = [start_syslog(agent, os.environ.get('FLOORBIT_AGENT_SYSLOG_PORT', '')),
               start_flows(agent, os.environ.get('FLOORBIT_AGENT_FLOWS_PORT', '')),
-              start_captive(agent, os.environ)]
+              start_captive(agent, os.environ), start_front_door(agent, os.environ)]
     from . import metrics as agent_metrics
-    agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None))
+    agent.metrics.collect(agent_metrics.relay_collector(relays[0] or None, relays[1] or None,
+                                                        relays[2].api if relays[2] else None))
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
                                          HEALTHY_FOR, os.environ.get('FLOORBIT_AGENT_METRICS_TOKEN') or None)
     keepalived = start_vrrp(agent, os.environ)

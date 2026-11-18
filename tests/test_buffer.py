@@ -180,6 +180,32 @@ def test_open_buffer_settings(tmp_path):
     assert 'must be numbers' in said[0]
 
 
+@pytest.mark.parametrize('setting', [
+    {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'inf'}, {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'nan'},
+    {'FLOORBIT_AGENT_BUFFER_MAX_MB': '1e400'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': 'nan'},
+    {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '0'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '-1'}])
+def test_a_buffer_number_that_is_no_size_turns_the_buffer_off_not_syslog(tmp_path, monkeypatch, setting):
+    env = {'FLOORBIT_DATA_FILE': str(tmp_path / 'agent-data.json'), **setting}
+    said = []
+    assert agent_mod.open_buffer('syslog', env, out=said.append) is None
+    assert 'must be numbers' in said[0]
+    # The relay still starts and keeps lines in memory; it used to fail with the buffer.
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv('FLOORBIT_AGENT_SYSLOG_BIND', '127.0.0.1')
+
+    class Sender:
+        def send_syslog(self, lines):
+            return True
+
+    relay = agent_mod.start_syslog(Sender(), '0', out=said.append)
+    try:
+        assert relay and relay.spool is None
+    finally:
+        if relay:
+            relay.stop()
+
+
 def test_metrics_count_the_buffer(tmp_path):
     from floorbit_agent.metrics import Metrics, relay_collector
     hosted = Hosted()
@@ -212,3 +238,33 @@ def test_a_burst_of_syslog_is_read_by_one_thread_with_room_in_the_kernel():
         assert r.received == 500 and threading.active_count() <= threads + 1
     finally:
         r.stop(flush=False)
+
+
+def test_a_batch_of_long_lines_is_split_to_fit_what_the_hosted_side_takes(tmp_path):
+    """2000 lines of 2048 emoji are 47 MB as JSON: the hosted side refused it (413) or, gzipped, read
+    it as empty and took none. Posts now stay under BATCH_BYTES, live and from the disk buffer."""
+    hosted = Hosted()
+    sizes = []
+    send = hosted.send
+
+    def measured(lines, dropped):
+        sizes.append(len(json.dumps({'lines': lines, 'dropped': dropped})))
+        return send(lines, dropped)
+
+    r = relay(hosted, tmp_path)
+    r.send = measured
+    for n in range(2000):
+        r.receive(f'{n:04d}' + '😀' * 3000, '192.0.2.21')
+    r.flush_once()
+    assert len(hosted.got) == 2000 and [raw[:4] for raw in hosted.got] == [f'{n:04d}' for n in range(2000)]
+    assert len(sizes) > 1 and max(sizes) <= syslog_relay.BATCH_BYTES + 64 * 1024
+
+    hosted.away, sizes[:] = True, []
+    for _ in range(2000):
+        r.receive('😀' * 2048, '192.0.2.21')
+    with pytest.raises(ConnectionError):
+        r.flush_once()
+    hosted.away = False
+    while len(r.spool):
+        r.flush_once()
+    assert max(sizes) <= syslog_relay.BATCH_BYTES + 64 * 1024

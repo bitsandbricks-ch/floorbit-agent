@@ -19,6 +19,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -27,6 +28,11 @@ from pathlib import Path
 PROBATION = 300          # seconds a new version must stay healthy
 POLICIES = ('auto', 'approve', 'off')
 MAX_EVENTS = 20
+# What the hosted side offers becomes folder names here: only these shapes, so a stolen hosted
+# login can't point an install (and its clean-up) at another folder ("../../...").
+ID_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}\Z')
+VERSION_RE = re.compile(r'^[0-9][0-9A-Za-z.+-]{0,39}\Z')
+FILE_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}-[0-9][0-9A-Za-z.+-]{0,39}\.tar\.gz\Z')
 
 
 def policy(env):
@@ -66,10 +72,16 @@ class Updater:
             return default
 
     def _save(self):
+        # A full or read-only disk must not stop the round: the plugin settings still get applied,
+        # the state stays in memory and is written again on the next change.
         tmp = self.state_path.with_suffix('.tmp')
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(self.state, f, indent=1, sort_keys=True)
-        os.replace(tmp, self.state_path)
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self.state, f, indent=1, sort_keys=True)
+            os.replace(tmp, self.state_path)
+        except OSError as exc:
+            self.log(f'[agent] could not save the plugin update state: {exc}')
+            tmp.unlink(missing_ok=True)
 
     def _entry(self, pid):
         return self.state.setdefault(pid, {'current': None, 'previous': None, 'bad': [], 'pending': None})
@@ -148,6 +160,10 @@ class Updater:
                 if not isinstance(b, dict):
                     continue
                 version = str(b.get('version') or '')
+                if (not ID_RE.match(str(pid)) or not VERSION_RE.match(version) or '..' in version
+                        or not FILE_RE.match(str(b.get('file') or ''))):
+                    self.log(f'[agent] ignored a bundle offer with a bad id, version or file: {str(pid)[:60]!r}')
+                    continue
                 entry = self.state.get(pid) or {}
                 if (not version or not self.b.newer(version, self.running_version(pid))
                         or version in (entry.get('bad') or [])):
@@ -155,7 +171,10 @@ class Updater:
                         entry['pending'] = None
                         changed = True
                     continue
-                if int(b.get('agent_api') or 1) > self._agent_api():
+                api = b.get('agent_api', 1)
+                # Anything but a whole number counts as an API this image doesn't know: never a crash
+                # that stops every other offer in this round.
+                if isinstance(api, bool) or not isinstance(api, int) or api > self._agent_api():
                     self._mark_pending(pid, b, 'needs a newer agent image')
                     changed = True
                     continue
@@ -200,6 +219,8 @@ class Updater:
             if resp.status_code != 200:
                 raise self.b.BundleError(f'the hosted Floorbit answered {resp.status_code}')
             data = resp.content
+            if len(data) > self.b.MAX_BUNDLE:
+                raise self.b.BundleError('bundle too large')
             if hashlib.sha256(data).hexdigest() != str(b.get('sha256')):
                 raise self.b.BundleError('checksum differs from what the hosted side listed')
             shutil.rmtree(tmp, ignore_errors=True)
