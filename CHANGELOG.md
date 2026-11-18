@@ -52,6 +52,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- The seat speed test through the front door works with Floorbit from 2026-11-18 on, which counts each seat's tests on top of each client's (`FLOORBIT_REF` moves to that Floorbit).
 - Stopping the agent while it was sending syslog could fail with "pop from an empty deque" and keep the waiting lines on disk twice.
 - A syslog batch the hosted Floorbit refuses as too big is sent again in halves instead of blocking the lines behind it; a single line still too big is skipped and logged.
 - Syslog posts stay under 8 MB. 2000 long lines full of emoji or other non-ASCII came to 47 MB as JSON: the hosted Floorbit took none of a gzipped post (silently) and refused a plain one, which then blocked every line behind it.
