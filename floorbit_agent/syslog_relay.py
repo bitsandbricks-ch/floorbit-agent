@@ -16,6 +16,7 @@ heard it, so the hosted side can keep one copy when two agents, or a replay, sen
 """
 import contextlib
 import hashlib
+import json
 import socket
 import threading
 import time
@@ -25,6 +26,9 @@ MAX_LINE = 2048          # as floorbit/syslog.py
 BACKLOG = 20_000
 RECEIVE_BUFFER = 8 * 1024 ** 2   # bytes asked of the kernel (capped at net.core.rmem_max)
 BATCH = 2000             # the hosted side takes at most this many per post
+BATCH_BYTES = 8 * 1024 ** 2   # and a post stays well under its 32 MB: 2000 long lines of emoji
+                              # come to 47 MB as JSON, which it refused (413) or, gzipped, took as
+                              # empty, losing them all
 EVERY = 2.0              # seconds between sends while lines come in
 REPLAY = 5               # buffered batches per round once the hosted side is back: the backlog
                          # catches up at 5,000 lines a second without crowding out live lines
@@ -77,13 +81,23 @@ class Relay:
     def buffered(self):
         return len(self.spool) if self.spool is not None else 0
 
+    def _batch_size(self):
+        """How many of the oldest lines make one post: up to BATCH, and BATCH_BYTES as JSON (at
+        least one, which MAX_LINE keeps far below it). Call with the lock held."""
+        size = 0
+        for n in range(min(BATCH, len(self.lines))):
+            size += len(json.dumps(self.lines[n])) + 1
+            if size > BATCH_BYTES and n:
+                return n
+        return min(BATCH, len(self.lines))
+
     def spill(self):
         """Move what waits in memory to the disk buffer, oldest first, a batch per file."""
         if self.spool is None:
             return
         while True:
             with self._lock:
-                batch = [self.lines.popleft() for _ in range(min(BATCH, len(self.lines)))]
+                batch = [self.lines.popleft() for _ in range(self._batch_size())]
             if not batch:
                 return
             self.spool.put(batch)
@@ -122,7 +136,7 @@ class Relay:
         total = 0
         while True:
             with self._lock:
-                batch = [self.lines[i] for i in range(min(BATCH, len(self.lines)))]
+                batch = [self.lines[i] for i in range(self._batch_size())]
                 dropped = self.all_dropped
             if not batch:
                 return total
