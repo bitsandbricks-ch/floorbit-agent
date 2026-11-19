@@ -264,9 +264,9 @@ def test_telegraf_mac_tables_feed_the_ip_and_mac_history(fb, lab):
 
 @pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
 def test_telegraf_takes_the_switches_traps(fb, lab):
-    """The switches' linkDown/linkUp traps get through the agent's Telegraf: its trap listener needs
-    net-snmp's snmptranslate, and an image without it drops every trap with "Error resolving OID"
-    (the telemetry plugin's health then names the traps listener)."""
+    """The switches' linkDown/linkUp traps get through the agent's Telegraf. A trap whose OIDs
+    Telegraf can't name (net-snmp's snmptranslate missing, no MIB files) is dropped with "Error
+    resolving OID", and the telemetry plugin's health then names the traps listener."""
     def trap_trouble():
         out = []
         for a in fb.get('/api/agents')['agents']:

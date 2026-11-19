@@ -68,7 +68,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
-- SNMP traps get through: the image now has net-snmp's `snmptranslate`, without which Telegraf dropped every linkDown/linkUp with "Error resolving OID". The lab checks that traps get through.
+- SNMP traps get through: Telegraf dropped every linkDown/linkUp with "Error resolving OID", because it named OIDs with net-snmp's `snmptranslate`, which the image doesn't have. `FLOORBIT_REF` moves to the Floorbit whose Telegraf config uses Telegraf's own MIB reader (gosmi) instead. The lab now checks that traps get through.
 - A plugin's HTTP listener takes chunked bodies. Telegraf's HTTP output sends that way, so until now the telemetry collector dropped everything Telegraf sent. `FLOORBIT_REF` moves to the Floorbit that finds a firewall by its short name when its own Telegraf sends the full host name.
 - The seat speed test through the front door works with Floorbit from 2026-11-18 on, which counts each seat's tests on top of each client's (`FLOORBIT_REF` moves to that Floorbit).
 - Stopping the agent while it was sending syslog could fail with "pop from an empty deque" and keep the waiting lines on disk twice.
