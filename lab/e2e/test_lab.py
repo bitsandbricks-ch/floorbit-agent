@@ -251,10 +251,15 @@ def test_telegraf_mac_tables_feed_the_ip_and_mac_history(fb, lab):
 
     def found():
         rows = fb.get('/api/endpoints', params={'q': seat.mac})['rows']
-        return [r for r in rows if r['mac'] == seat.mac] or None
-    rows = eventually(found, timeout=240, what=f'{seat.label} in the IP and MAC history')
-    assert {(r['device'], r['port']) for r in rows} == {(seat.switch, short(seat.port))}
-    assert rows[0]['ip'] == seat.ip
+        # Polls race: the core's ARP can come in before the access switch's MAC table. That gives an
+        # ARP-only row first (the core, no port), which the history keeps; wait for the port.
+        rows = [r for r in rows if r['mac'] == seat.mac]
+        return rows if any(r['port'] for r in rows) else None
+    rows = eventually(found, timeout=240, what=f'{seat.label} on its port in the IP and MAC history')
+    on_ports = [r for r in rows if r['port']]
+    assert {(r['device'], r['port']) for r in on_ports} == {(seat.switch, short(seat.port))}
+    assert on_ports[0]['ip'] == seat.ip
+    assert all(r['device'] == lab.core.name for r in rows if not r['port']), 'only the core has it without a port'
 
 
 @pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
