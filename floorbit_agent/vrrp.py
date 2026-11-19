@@ -23,6 +23,8 @@ import threading
 import time
 from typing import NamedTuple
 
+from . import logs
+
 STATES = ('MASTER', 'BACKUP', 'FAULT', 'STOP')
 PREFERRED, OTHER = 150, 100        # priorities: the preferred holder wins while it is up
 CHECK_EVERY = 2                    # seconds between health checks
@@ -113,7 +115,7 @@ def parse_fifo_line(line):
 class Keepalived:
     """keepalived as the agent's child, with its state in the agent's /metrics."""
 
-    def __init__(self, settings, metrics, log=print, binary=None, healthy=None):
+    def __init__(self, settings, metrics, log=logs.say, binary=None, healthy=None):
         self.settings = settings
         self.metrics = metrics
         self.log = log
