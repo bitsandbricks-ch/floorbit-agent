@@ -7,8 +7,9 @@ Signs in as the admin, enrols each agent and writes its key to <out>/<name>.key 
 it at start); an agent whose key file is there already is left alone, so a restart keeps its keys.
 It sets up the agents' plugins in Floorbit, as the crew would at an event (the agents read none
 of it from their own environment): the lab LibreNMS, syslog and NetFlow from the hall, the
-check-in note and the front door. With --listeners-on, only that agent runs the ones that listen (two agents on one
-machine can't take the same port). Then, if the plan has no seats yet, it adds what
+check-in note and the front door, and telemetry for every lab device. With --listeners-on, only
+that agent runs the ones that listen (two agents on one machine can't take the same port); with
+--telemetry-on, only that agent collects telemetry. Then, if the plan has no seats yet, it adds what
 lab/topology.py describes: the switches and firewalls to the inventory (with their management
 addresses, so syslog finds its device) and one seat block per access switch. Standard library only.
 """
@@ -24,7 +25,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from topology import LAB, SEATS_PER_BLOCK
+from topology import LAB, SEAT_VLAN, SEATS_PER_BLOCK
 
 
 class Client:
@@ -88,14 +89,48 @@ def plugins(fb, args):
         status, body = fb.call('PUT', f'/api/settings/plugins/{pid}', {'enabled': True})
         if status != 200:
             raise SystemExit(f'Turning on {pid} failed: {status} {body}')
-    if args.listeners_on:
+    if args.listeners_on or args.telemetry_on:
         _, body = fb.call('GET', '/api/agents')
         for agent in body.get('agents', []):
-            off = [] if agent['name'] == f'Lab {args.listeners_on}' else listeners
+            off = []
+            if args.listeners_on and agent['name'] != f'Lab {args.listeners_on}':
+                off += listeners
+            if args.telemetry_on and agent['name'] != f'Lab {args.telemetry_on}':
+                off.append('telemetry')
             status, answer = fb.call('PATCH', f'/api/agents/{agent["id"]}', {'plugins_off': off})
             if status != 200:
-                raise SystemExit(f'Leaving the listeners off on {agent["name"]} failed: {status} {answer}')
+                raise SystemExit(f'Leaving plugins off on {agent["name"]} failed: {status} {answer}')
     print('Set up the plugins: LibreNMS, syslog, NetFlow, the check-in note, the front door.')
+
+
+def telemetry(fb, args):
+    """The Telemetry plugin and its devices (Settings > Telemetry), as the crew would set them up:
+    every switch and firewall polled over SNMP by the agent's Telegraf, Catalyst MAC tables per
+    VLAN, the core's model-driven telemetry by its node name, the firewalls' own Telegraf push."""
+    where = dict(item.split('=', 1) for item in args.snmp_devices.split(',') if '=' in item)
+    _, have = fb.call('GET', '/api/settings/telemetry')
+    known = {t['name'] for t in (have or {}).get('targets', [])}
+    for dev in LAB.devices:
+        if dev.name in known:
+            continue
+        host, _, port = where.get(dev.name, dev.ip).partition(':')
+        body = {'name': dev.name, 'address': host, 'port': int(port) if port else None, 'community': 'public',
+                'snmp_version': '2c', 'drivers': ['snmp', 'traps']}
+        if dev.role == 'firewall':
+            body.update(kind='firewall', platform='opnsense', drivers=['snmp', 'push'])
+        elif dev.role == 'core':
+            body.update(platform='nxos', drivers=['snmp', 'traps', 'mdt'], mdt_node=dev.name)
+        else:
+            vlans = sorted(SEAT_VLAN.values()) if dev.role == 'distribution' else sorted(
+                {s.vlan for s in LAB.seats if s.switch == dev.name})
+            body.update(platform='ios', fdb='cisco_vlans', vlans=vlans)
+        status, answer = fb.call('POST', '/api/settings/telemetry/targets', body)
+        if status not in (200, 201):
+            raise SystemExit(f'Adding {dev.name} to telemetry failed: {status} {answer}')
+    status, answer = fb.call('PUT', '/api/settings/plugins/telemetry', {'enabled': True})
+    if status != 200:
+        raise SystemExit(f'Turning on telemetry failed: {status} {answer}')
+    print(f'Set up telemetry for {len(LAB.devices)} devices.')
 
 
 def seed(fb):
@@ -145,6 +180,10 @@ def main(argv=None):
     # X-Forwarded-For.
     p.add_argument('--captive-proxies', default='172.31.10.60')
     p.add_argument('--listeners-on', default='', help='the one agent that runs the listening plugins')
+    # Without VRRP every agent counts as the collector (Floorbit's docs/telemetry.md): one collects.
+    p.add_argument('--telemetry-on', default='', help='the one agent that collects telemetry')
+    p.add_argument('--snmp-devices', default='',
+                   help='where Telegraf polls each device, "name=host:port,..." (default: its lab address, port 161)')
     args = p.parse_args(argv)
     fb = Client(args.url)
     fb.wait()
@@ -159,6 +198,7 @@ def main(argv=None):
         os.chmod(path, 0o644)        # the agent runs as another user; lab keys only
         print(f'Enrolled {name} as {body["id"]}')
     plugins(fb, args)
+    telemetry(fb, args)
     seed(fb)
     return 0
 

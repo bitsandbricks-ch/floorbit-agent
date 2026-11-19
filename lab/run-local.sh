@@ -8,7 +8,8 @@
 #   lab/run-local.sh stop
 #
 # Ports: Floorbit 5000 (and its own syslog 5514), lab LibreNMS 18000, devices UDP 11161-11168, agents: syslog 5524,
-# NetFlow 2065, captive 8908, front door 8443 (agent A only), metrics 9520/9521, Redis 6390. State in $LAB_STATE (/tmp/floorbit-lab).
+# NetFlow 2065, captive 8908, front door 8443 (agent A only), metrics 9520/9521, telemetry 8186/8187,
+# Redis 6390. State in $LAB_STATE (/tmp/floorbit-lab).
 set -e
 LAB=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$LAB")
@@ -45,7 +46,8 @@ start() {
   # note and the front door here, so the failover run has no syslog (the Docker lab has it on both).
   $PY "$LAB/e2e/setup.py" --url http://127.0.0.1:5000 --out "$STATE/keys" --password lab-admin-password \
     --librenms-url http://127.0.0.1:18000 --syslog-port 5524 --flows-port 2065 --captive 127.0.0.1:8908 \
-    --front-door 127.0.0.1:8443 --captive-proxies 127.0.0.1 --listeners-on agent-a agent-a agent-b
+    --front-door 127.0.0.1:8443 --captive-proxies 127.0.0.1 --listeners-on agent-a --telemetry-on agent-a --snmp-devices "${spec#,}" \
+    agent-a agent-b
 
   i=0
   for a in agent-a agent-b; do
@@ -54,17 +56,30 @@ start() {
       FLOORBIT_AGENT_INSECURE=1 FLOORBIT_AGENT_KEY="$(cat "$STATE/keys/$a.key")" \
       FLOORBIT_DATA_FILE="$STATE/$a/agent-data.json" FLOWS_DIR="$STATE/$a/flows" \
       FLOORBIT_AGENT_METRICS=127.0.0.1:$((9520 + i)) FLOORBIT_AGENT_LAN_URL=http://127.0.0.1:8908 \
+      FLOORBIT_TELEMETRY_PORT=$((8186 + i)) FLOORBIT_TELEGRAF_OUTPUT=http://127.0.0.1:$((8186 + i))/write \
       $PY -m floorbit_agent) > "$STATE/$a.log" 2>&1 &
     echo $! > "$STATE/$a.pid"
     i=$((i + 1))
   done
+  # Telegraf, if there is one, polls the simulated devices for agent A's telemetry collector.
+  # Traps stay off here: every device is 127.0.0.1, so a trap couldn't say which one it is.
+  conf="$STATE/agent-a/plugins/telemetry/telegraf.conf"
+  if command -v "${TELEGRAF:-telegraf}" > /dev/null; then
+    (until [ -f "$conf" ]; do sleep 2; done; exec "${TELEGRAF:-telegraf}" --config "$conf" --watch-config notify) \
+      > "$STATE/telegraf.log" 2>&1 &
+  else
+    echo "No telegraf here (set TELEGRAF): the telemetry tests will skip what it polls."
+  fi
   # Everything comes from 127.0.0.1 here, so one replay sends for all devices.
-  LAB_SYSLOG_TARGETS=127.0.0.1:5524 LAB_FLOW_TARGETS=127.0.0.1:2065 \
-    LAB_LANCACHE_DIR="$STATE/lancache" $PY "$LAB/replay/replay.py" > "$STATE/replay.log" 2>&1 &
+  LAB_SYSLOG_TARGETS=127.0.0.1:5524 LAB_FLOW_TARGETS=127.0.0.1:2065 LAB_LANCACHE_DIR="$STATE/lancache" \
+    LAB_PUSH_URL=http://127.0.0.1:8186/write LAB_STREAM_URL=http://127.0.0.1:8186/write \
+    LAB_TELEMETRY_TOKEN_FILE="$STATE/agent-a/plugins/telemetry/ingest-token" \
+    $PY "$LAB/replay/replay.py" > "$STATE/replay.log" 2>&1 &
   echo "Lab up: http://127.0.0.1:5000 (admin / lab-admin-password), logs in $STATE"
 }
 
 e2e() {
+  command -v "${TELEGRAF:-telegraf}" > /dev/null || export LAB_TELEGRAF=0
   LAB_FLOORBIT_URL=http://127.0.0.1:5000 LAB_ADMIN_PASSWORD=lab-admin-password \
     LAB_AGENT_METRICS=agent-a=http://127.0.0.1:9520 \
     LAB_CAPTIVE=http://127.0.0.1:8908 LAB_FRONT_DOOR=http://127.0.0.1:8443 $PY -m pytest -q "$LAB/e2e" "$@"
@@ -72,6 +87,7 @@ e2e() {
 
 stop() {
   pkill -f "$LAB/replay/replay.py" || true
+  pkill -f "telegraf --config $STATE/" || true
   pkill -f "floorbit_agent" || true
   pkill -f "$LAB/librenms_lite/server.py" || true
   pkill -f "snmpsim-command-responder --data-dir=$LAB" || true

@@ -118,6 +118,40 @@ def test_lancache_lines_have_the_formats_floorbit_reads(tmp_path):
     assert all(' queries: info: client @' in line and ' query: ' in line for line in dns)
 
 
+def test_the_cores_stream_reaches_its_ports_in_floorbits_collector():
+    state = pytest.importorskip('floorbit.telemetry.state')
+    picture = state.State()
+    picture.know([{'name': LAB.core.name, 'address': LAB.core.ip, 'mdt_node': LAB.core.name, 'drivers': ['mdt']}])
+    now = time.time()
+    for rnd in (0, 1):
+        used, total, bad = picture.apply_text('\n'.join(replay.streamed_lines(rnd, now + rnd * 10)), now + rnd * 10)
+        assert used == total and not bad
+    core = picture.device(LAB.core.name)
+    uplink = next(p for p in core.interfaces.values() if p.name == 'Ethernet1/49')
+    assert uplink.oper == 'up' and uplink.in_bps > 0
+    assert set(picture.devices) == {LAB.core.name}, 'MDT found the core by its node name'
+
+
+def test_telemetry_pushes_carry_the_ingest_token(monkeypatch, tmp_path):
+    (tmp_path / 'token').write_text('fba_lab\n')
+    monkeypatch.setenv('LAB_TELEMETRY_TOKEN_FILE', str(tmp_path / 'token'))
+    seen = []
+
+    class Answer:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b''
+    monkeypatch.setattr(replay.urllib.request, 'urlopen', lambda req, timeout: (seen.append(req), Answer())[1])
+    monkeypatch.setenv('LAB_STREAM_URL', 'http://collector.example/write')
+    replay.one_round(0, time.time(), device=LAB.core.name)
+    assert seen and seen[0].get_header('Authorization') == 'Token fba_lab'
+
+
 def test_opnsense_push_is_line_protocol():
     for line in replay.opnsense_lines(2, 1_800_000_000):
         measurement_tags, fields, stamp = line.split(' ')
