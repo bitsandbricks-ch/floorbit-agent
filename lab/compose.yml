@@ -19,9 +19,15 @@ x-device: &device
   command: ["sh", "/lab/device.sh"]
   environment: &device-env
     LAB_SYSLOG_TARGETS: 172.31.10.31:5514,172.31.10.32:5514
-    LAB_TRAP_TARGETS: ${LAB_TRAP_TARGETS:-}
+    # linkDown/linkUp to the agent's Telegraf, which knows each device by its address.
+    LAB_TRAP_TARGETS: ${LAB_TRAP_TARGETS:-172.31.10.33:1162}
     LAB_REPLAY_EVERY: "10"
   restart: unless-stopped
+
+x-telemetry-env: &telemetry-env
+  LAB_PUSH_URL: http://172.31.10.31:8186/write
+  LAB_STREAM_URL: http://172.31.10.31:8186/write
+  LAB_TELEMETRY_TOKEN_FILE: /agent-a/plugins/telemetry/ingest-token
 
 x-agent: &agent
   build: {context: .., dockerfile: Dockerfile}
@@ -80,7 +86,9 @@ services:
   setup:
     image: ${LAB_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-lab:latest}
     build: {context: ., dockerfile: Dockerfile}
-    command: ["python", "/lab/e2e/setup.py", "--url", "http://172.31.10.2:5000", "--out", "/keys", "agent-a", "agent-b"]
+    # Telemetry on agent A only: without VRRP both agents would count as the collector.
+    command: ["python", "/lab/e2e/setup.py", "--url", "http://172.31.10.2:5000", "--out", "/keys",
+              "--telemetry-on", "agent-a", "agent-a", "agent-b"]
     environment: {AUTH_ADMIN_USER: admin, AUTH_ADMIN_PASSWORD: lab-admin-password}
     volumes: ["keys:/keys"]
     networks: {lab: {ipv4_address: 172.31.10.4}}
@@ -105,10 +113,13 @@ services:
       retries: 30
     depends_on: [core-01, dist-01, access-a1, access-b1, access-c1, access-d1, fw-01, fw-02]
 
-  # The event network. The core also exports NetFlow (to agent A, as through a VRRP address).
+  # The event network. The core also exports NetFlow (to agent A, as through a VRRP address) and
+  # streams gNMI and Cisco MDT; the firewalls push with their own Telegraf. Both go to agent A's
+  # telemetry collector with its ingest token, read from agent A's state.
   core-01:
     <<: *device
-    environment: {<<: *device-env, DEVICE: core-01, LAB_FLOW_TARGETS: "172.31.10.31:2055"}
+    environment: {<<: [*device-env, *telemetry-env], DEVICE: core-01, LAB_FLOW_TARGETS: "172.31.10.31:2055"}
+    volumes: ["agent-a-state:/agent-a:ro"]
     networks: {lab: {ipv4_address: 172.31.10.11}}
   dist-01:
     <<: *device
@@ -132,11 +143,13 @@ services:
     networks: {lab: {ipv4_address: 172.31.10.23}}
   fw-01:
     <<: *device
-    environment: {<<: *device-env, DEVICE: fw-01, LAB_PUSH_URL: "${LAB_PUSH_URL:-}"}
+    environment: {<<: [*device-env, *telemetry-env], DEVICE: fw-01}
+    volumes: ["agent-a-state:/agent-a:ro"]
     networks: {lab: {ipv4_address: 172.31.10.41}}
   fw-02:
     <<: *device
-    environment: {<<: *device-env, DEVICE: fw-02, LAB_PUSH_URL: "${LAB_PUSH_URL:-}"}
+    environment: {<<: [*device-env, *telemetry-env], DEVICE: fw-02}
+    volumes: ["agent-a-state:/agent-a:ro"]
     networks: {lab: {ipv4_address: 172.31.10.42}}
   # The LAN cache machine: writes the cache's access log and lancache-dns's query log, which the
   # agents read (mounted at /lancache) once the LAN cache plugin is on.
@@ -148,12 +161,28 @@ services:
 
   agent-a:
     <<: *agent
-    environment: {<<: *agent-env, LAB_AGENT: agent-a, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.31:8908"}
+    environment: {<<: *agent-env, LAB_AGENT: agent-a, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.31:8908",
+                  FLOORBIT_TELEGRAF_OUTPUT: "http://172.31.10.31:8186/write"}
+    volumes:
+      - keys:/keys:ro
+      - lancache:/lancache:ro
+      - agent-a-state:/app/state
     networks: {lab: {ipv4_address: 172.31.10.31}}
   agent-b:
     <<: *agent
     environment: {<<: *agent-env, LAB_AGENT: agent-b, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.32:8908"}
     networks: {lab: {ipv4_address: 172.31.10.32}}
+
+  # Agent A's Telegraf, as in the agent's own compose.yml: polls the simulated devices over SNMP
+  # (MAC tables per VLAN on the Catalysts), takes their traps, sends to agent A.
+  telegraf:
+    image: telegraf:1.40.3
+    user: "10001"
+    entrypoint: ["sh", "-c", "until [ -f /app/state/plugins/telemetry/telegraf.conf ]; do sleep 2; done; exec telegraf --config /app/state/plugins/telemetry/telegraf.conf --watch-config notify"]
+    volumes: ["agent-a-state:/app/state:ro"]
+    networks: {lab: {ipv4_address: 172.31.10.33}}
+    depends_on: [agent-a]
+    restart: unless-stopped
 
   e2e:
     image: ${LAB_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-lab:latest}
@@ -175,3 +204,4 @@ networks:
 volumes:
   keys:
   lancache:
+  agent-a-state:

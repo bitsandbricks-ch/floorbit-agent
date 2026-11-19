@@ -14,10 +14,11 @@ generated from it:
 | `core-01` | Nexus core (holds the ARP table, routes the seat VLANs) | snmpsim, NX-OS ifIndexes, Q-BRIDGE FDB |
 | `dist-01` | Catalyst 4500 distribution (no ARP) | snmpsim, per-VLAN FDB (`public@<vlan>`) |
 | `access-a1` … `access-d1` | Catalyst 2960-X access, 24 seats each | snmpsim, built from the MIBs (the real ones aren't running yet) |
-| `fw-01`, `fw-02` | OPNsense firewalls | snmpsim, filterlog syslog, a Telegraf push sample |
+| `fw-01`, `fw-02` | OPNsense firewalls | snmpsim, filterlog syslog, their own Telegraf's push |
 | `lancache-01` | The LAN cache box, also the DNS server | its access log and the DNS query log |
 | `librenms` | LibreNMS | [`lab/librenms_lite`](../../lab/librenms_lite/server.py): polls the simulated devices over SNMP and answers the API calls Floorbit makes |
 | `agent-a`, `agent-b` | Two agents at the event | this repository's image |
+| `telegraf` | Agent A's Telegraf sidecar | `telegraf:1.40.3` with the config agent A writes: SNMP polling (MAC tables per VLAN on the Catalysts) and traps |
 | `floorbit` | The hosted Floorbit | Floorbit's image, or built from a Floorbit checkout |
 
 96 seats in four blocks of 24, on VLANs 101 to 104. A few are faulty on purpose: B-3 runs half
@@ -107,9 +108,24 @@ more from the pulled images only.
 - the NetFlow summary, the captive portal note, the agents' metrics;
 - failover: with agent A stopped, lookups and syslog go on through agent B.
 
-The LAN cache numbers and device telemetry are skipped until Floorbit has them
-(bitsandbricks-ch/floorbit#660, #661); recorded gNMI and Cisco MDT streams for Telegraf come with
-the telemetry plugin.
+- telemetry: every device reports to agent A's collector; Telegraf's SNMP polls show a seat
+  port's traffic, the shut port and the distribution's CPU; its MAC tables and the core's ARP feed
+  the IP and MAC history; a firewall's own Telegraf push lands on that firewall.
+
+The LAN cache numbers are skipped until Floorbit has them (bitsandbricks-ch/floorbit#660).
+
+## Telemetry
+
+Setup turns on Floorbit's Telemetry plugin with every lab device as a target, as the crew would
+under Settings > Telemetry: SNMP v2c for all, MAC tables per seat VLAN on the Catalysts, Cisco
+model-driven telemetry by node name on the core, the firewalls' own push. Only agent A collects
+(without VRRP both agents would count as the collector), and the `telegraf` service runs the config
+agent A writes. The core's replay also streams gNMI and Cisco MDT counters for its ports, and the
+firewalls push CPU, memory and pf states, both to agent A's port 8186 with its ingest token.
+
+`lab/run-local.sh` starts Telegraf when there is one on the PATH (or `TELEGRAF=/path/to/telegraf`);
+without it the tests that need it skip. Traps stay off locally: every device is 127.0.0.1 there, so
+the agent couldn't tell them apart.
 
 ## Real samples
 

@@ -525,6 +525,36 @@ def test_a_listener_refuses_bad_or_huge_bodies(setup, length, status):
     assert got == []
 
 
+def test_a_listener_takes_a_chunked_body(setup):
+    """Telegraf's HTTP output sends its gzip body chunked, with no Content-Length."""
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    got = []
+    port = ctx.listen_http(0, lambda method, path, headers, body: (got.append(body), (204, b""))[1], host="127.0.0.1")
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"POST /write HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                  b"5\r\nfb_if\r\n7;ext=1\r\n,a=1 b=\r\n1\r\n2\r\n0\r\n\r\n")
+        answer = s.recv(200).decode()
+    assert answer.split()[1] == "204"
+    assert got == [b"fb_if,a=1 b=2"]
+
+
+@pytest.mark.parametrize("chunks, status", [(b"zz\r\nx\r\n0\r\n\r\n", "400"),
+                                            (b"%x\r\n" % (64 * 1024 * 1024), "413")])
+def test_a_listener_refuses_bad_or_huge_chunks(setup, chunks, status):
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    got = []
+    port = ctx.listen_http(0, lambda method, path, headers, body: (got.append(body), (204, b""))[1], host="127.0.0.1")
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"POST /write HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n" + chunks)
+        answer = s.recv(200).decode()
+    assert answer.split()[1] == status
+    assert got == []
+
+
 def test_a_client_that_stalls_gives_its_thread_back(setup, monkeypatch):
     monkeypatch.setattr("floorbit_agent.plugin_host.HTTP_TIMEOUT", 0.3)
     host, _hosted, _agent, _lines = setup
