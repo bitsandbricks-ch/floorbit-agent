@@ -148,21 +148,21 @@ def telemetry(fb, args):
         if dev.name not in ids:
             raise SystemExit(f'{dev.name} is not in the inventory')
         host, _, port = where.get(dev.name, dev.ip).partition(':')
-        props = {'telemetry_drivers': 'snmp traps'}
+        props = {'telemetry.drivers': 'snmp traps'}
         if host != dev.ip:
-            props['telemetry_address'] = host
+            props['telemetry.address'] = host
         if port:
-            props['telemetry_port_snmp'] = port
+            props['telemetry.snmp.port'] = port
         if dev.role == 'firewall':
-            platform, props['telemetry_drivers'] = 'OPNsense', 'snmp push'
+            platform, props['telemetry.drivers'] = 'OPNsense', 'snmp push'
         elif dev.role == 'core':
             platform = 'NX-OS'
-            props.update(telemetry_drivers='snmp traps mdt', telemetry_mdt_node=dev.name)
+            props.update({'telemetry.drivers': 'snmp traps mdt', 'telemetry.mdt.node': dev.name})
         else:
             platform = 'IOS'
             vlans = sorted(SEAT_VLAN.values()) if dev.role == 'distribution' else sorted(
                 {s.vlan for s in LAB.seats if s.switch == dev.name})
-            props.update(telemetry_fdb='cisco_vlans', telemetry_vlans=' '.join(str(v) for v in vlans))
+            props.update({'telemetry.snmp.fdb': 'cisco_vlans', 'telemetry.snmp.vlans': ' '.join(str(v) for v in vlans)})
         body = {'platform': platform, 'properties': props}
         status, answer = fb.call('PATCH', f'/api/inventory/{ids[dev.name]}', body)
         if status != 200:
