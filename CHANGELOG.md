@@ -9,6 +9,7 @@ All notable changes to this project are listed here. The format follows
 ### Added
 
 - Drills in the test lab (`lab/e2e/test_drills.py`): a firewall and an access switch die and come back, LibreNMS goes away, the hosted Floorbit goes away and comes back; CI runs each. The lab plans a seat range per block on its firewalls.
+- The test lab's switches answer SSH as Cisco IOS and NX-OS (`lab/switch_ssh`), and the lab stores a switch login in Floorbit: the end-to-end tests run the switch command templates, a config backup, port shut, turn on and bounce, Clear port counters and the browser terminal through the agents. A shut port changes the switch's SNMP, syslog, traps and running config, as at the event.
 - `lab/senders.yml`: an agent of yours with the lab's simulated hall around it, sending syslog, traps, NetFlow, the gNMI/MDT stream and the firewalls' push, for a Floorbit you test with.
 - One agent per device: a device whose inventory names an agent (`telemetry_agent`) is polled only by that agent, also while it is the VRRP standby, and goes back to the others while it is away. Telemetry ports per kind (SNMP, gNMI, API). Built on Floorbit with bitsandbricks-ch/floorbit#857.
 - Built on Floorbit with bitsandbricks-ch/floorbit#858 (Telemetry under Monitoring, devices set up only in the inventory). The test lab now sets its devices up for telemetry in the inventory: the Telemetry feature and an SNMP v2c login for all devices, and per device its platform and `telemetry_*` properties.

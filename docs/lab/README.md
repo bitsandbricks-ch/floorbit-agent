@@ -25,6 +25,17 @@ duplex, C-9 counts CRC errors, D-12 is shut, and a handful are offline. The devi
 (link flaps, MAC flaps, BPDU guard, NX-OS speed changes, firewall filter lines), linkDown/linkUp
 traps and NetFlow v9 from the core, on a loop ([`lab/replay`](../../lab/replay/replay.py)).
 
+Every switch also answers SSH on port 22, as Catalyst IOS (the access and distribution switches)
+or NX-OS (the core), with the login `lab` / `lab-switch-password`
+([`lab/switch_ssh`](../../lab/switch_ssh/server.py)). It knows what Floorbit sends a switch and
+what a tech types, with IOS's abbreviations: `show running-config`, `show interfaces status`,
+`show interface Gi1/0/5`, `show mac address-table`, `show version`, `conf t` > `int gi1/0/5` >
+`shut` / `no shut` / `description`, `clear counters` (it asks `[confirm]`, as IOS does),
+`write memory`, and the pager until `terminal length 0`. A shut port does what it does at the
+event: its SNMP says so (LibreNMS and Telegraf see it), the switch logs `%LINK-5-CHANGED` and
+`%SYS-5-CONFIG_I` and sends a linkDown trap, and the running config has `shutdown` under it.
+Without `write memory`, a restarted switch comes back with its last saved config.
+
 `python3 lab/snmp/build.py` writes the SNMP data and the seat list (`lab/fixtures/seats.json`);
 the unit tests fail when someone changes `topology.py` and forgets to run it.
 
@@ -83,6 +94,9 @@ cp agent.env.example lab/agent.env       # FLOORBIT_URL and FLOORBIT_AGENT_KEY
 docker compose -f lab/senders.yml up -d
 ```
 
+The switches answer SSH there too (`lab` / `lab-switch-password`), for SSH port actions, switch
+commands, config backups and the terminal from your Floorbit.
+
 Then, in Floorbit: turn on the syslog (port 5514), NetFlow (port 2055) and Telemetry plugins, and
 add the devices to the inventory with the addresses in `lab/senders.yml`, in a group with Telemetry
 on and the SNMP v2c community `public`. What each device needs on top (`telemetry_drivers`,
@@ -100,6 +114,10 @@ lab/run-local.sh stop
 
 `lab/run-local.sh down <part>...` and `up <part>...` stop and start a device (by its name),
 `librenms` or `floorbit`, for the drills.
+
+The switches' SSH needs their lab addresses on the machine, since the agent logs in to private
+addresses only: add them once (`sudo ip addr add 172.31.10.11/32 dev lo`, and `.12`, `.20` to
+`.23`) and start with `LAB_SSH=1`. They answer on port 2222; without it the SSH tests skip.
 
 Plugin settings are the same for every agent, so on one machine only agent A runs syslog, NetFlow
 the check-in note and the front door (they would take the same ports); the failover's syslog test needs the
@@ -130,6 +148,11 @@ more from the pulled images only.
 - syslog from every kind of device arrives once, though both agents send it;
 - the NetFlow summary, the captive portal note, the agents' metrics;
 - failover: with agent A stopped, lookups and syslog go on through agent B;
+- SSH to the switches through the agents, with the login stored in Floorbit's inventory
+  ([`lab/e2e/test_switch_ssh.py`](../../lab/e2e/test_switch_ssh.py)): the show templates on IOS
+  and NX-OS, a config backup without the switch's secrets, a seat port shut (the switch's log,
+  LibreNMS, the next backup and its diff see it) and turned on again, a bounce, Clear port counters,
+  and the browser terminal with the pager;
 - telemetry: every device reports to agent A's collector; Telegraf's SNMP polls show a seat
   port's traffic, the shut port and the distribution's CPU; its MAC tables and the core's ARP feed
   the IP and MAC history; a firewall's own Telegraf push lands on that firewall.

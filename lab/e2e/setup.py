@@ -13,7 +13,8 @@ that agent runs the ones that listen (two agents on one machine can't take the s
 lab/topology.py describes: the switches and firewalls to the inventory (with their management
 addresses, so syslog finds its device), one seat block per access switch and the seat
 ranges each firewall serves. Last, it sets up
-telemetry for every lab device in the inventory. Standard library only.
+telemetry for every lab device in the inventory, and SSH to the switches with a stored login.
+Standard library only.
 """
 import argparse
 import http.cookiejar
@@ -103,6 +104,26 @@ def plugins(fb, args):
             if status != 200:
                 raise SystemExit(f'Leaving plugins off on {agent["name"]} failed: {status} {answer}')
     print('Set up the plugins: LibreNMS, syslog, NetFlow, the check-in note, the front door.')
+
+
+def switch_logins(fb, args):
+    """SSH to the switches, as the crew would set it up: the SSH port actions plugin (Cisco IOS
+    commands, the lab's SSH port) and one stored switch login for all devices. Port actions, switch
+    commands, config backups and the terminal then run through the agents without a typed login."""
+    status, answer = fb.call('PATCH', '/api/settings', {
+        'plugin.ssh-ports.platform': 'cisco_ios', 'plugin.ssh-ports.ssh_port': args.ssh_port,
+        'plugin.ssh-ports.down_seconds': 2})
+    if status != 200:
+        raise SystemExit(f'Setting up SSH port actions failed: {status} {answer}')
+    status, answer = fb.call('PUT', '/api/settings/plugins/ssh-ports', {'enabled': True})
+    if status != 200:
+        raise SystemExit(f'Turning on SSH port actions failed: {status} {answer}')
+    user, _, password = args.ssh_login.partition(':')
+    status, answer = fb.call('PUT', '/api/inventory/credentials', {
+        'owner_type': 'defaults', 'owner_id': 'defaults', 'kind': 'ssh', 'username': user, 'secret': password})
+    if status not in (200, 201):
+        raise SystemExit(f'Storing the switch login failed: {status} {answer}')
+    print(f'Set up SSH to the switches on port {args.ssh_port}.')
 
 
 def telemetry(fb, args):
@@ -208,6 +229,9 @@ def main(argv=None):
     p.add_argument('--telemetry-on', default='', help='the one agent that collects telemetry')
     p.add_argument('--snmp-devices', default='',
                    help='where Telegraf polls each device, "name=host:port,..." (default: its lab address, port 161)')
+    p.add_argument('--ssh-port', type=int, default=22, help="the switches' SSH port (lab/switch_ssh)")
+    # The lab switches' own login (switch_ssh/server.py), not a secret.
+    p.add_argument('--ssh-login', default='lab:lab-switch-password', help='user:password')
     args = p.parse_args(argv)
     fb = Client(args.url)
     fb.wait()
@@ -224,6 +248,7 @@ def main(argv=None):
     plugins(fb, args)
     seed(fb)
     telemetry(fb, args)     # on the inventory devices seed() adds
+    switch_logins(fb, args)
     return 0
 
 

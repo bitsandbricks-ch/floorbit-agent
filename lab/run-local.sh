@@ -10,6 +10,10 @@
 # Drills: "down"/"up" stop and start a device (by its name), librenms or floorbit, then
 # LAB_DRILL=... lab/run-local.sh test (docs/lab/README.md).
 #
+# The switches' SSH (switch_ssh/) needs their lab addresses on this machine, since the agent logs in
+# to private addresses only: add them once (sudo ip addr add 172.31.10.11/32 dev lo, and .12, .20-.23)
+# and start with LAB_SSH=1. They answer on port 2222.
+#
 # Ports: Floorbit 5000 (and its own syslog 5514), lab LibreNMS 18000, devices UDP 11161-11168, agents: syslog 5524,
 # NetFlow 2065, captive 8908, front door 8443 (agent A only), metrics 9520/9521, telemetry 8186/8187,
 # Redis 6390. State in $LAB_STATE (/tmp/floorbit-lab).
@@ -30,11 +34,19 @@ spec() {
 
 device_up() {
   port=$(spec | tr ',' '\n' | grep "^$1=" | cut -d: -f2)
-  # snmpsim drops to "nobody" before it writes its index: give it a folder it may write.
-  mkdir -p "$STATE/snmpsim-$1" && chmod 1777 "$STATE/snmpsim-$1"
-  snmpsim-command-responder --data-dir="$LAB/snmp/data/$1" --cache-dir="$STATE/snmpsim-$1" \
+  # snmpsim drops to "nobody" before it writes its index: give it a folder it may write. It serves a
+  # copy of the data, which the switch's SSH edits when a port is shut.
+  mkdir -p "$STATE/snmpsim-$1" "$STATE/snmp" && chmod 1777 "$STATE/snmpsim-$1"
+  [ -d "$STATE/snmp/$1" ] || cp -r "$LAB/snmp/data/$1" "$STATE/snmp/$1"
+  chmod -R a+rX "$STATE/snmp"
+  snmpsim-command-responder --data-dir="$STATE/snmp/$1" --cache-dir="$STATE/snmpsim-$1" \
     --agent-udpv4-endpoint="127.0.0.1:$port" --process-user=nobody --process-group=nogroup \
     --log-level=error > "$STATE/snmpsim-$1.log" 2>&1 &
+  case "$1" in fw-*) return ;; esac
+  [ "${LAB_SSH:-0}" = 1 ] || return 0
+  ip=$($PY -c "import sys; sys.path.insert(0, '$LAB'); from topology import LAB; print(LAB.device('$1').ip)")
+  LAB_SSH_STATE="$STATE/ssh" LAB_SNMP_DATA="$STATE/snmp/$1" LAB_SYSLOG_TARGETS=127.0.0.1:5524 \
+    $PY "$LAB/switch_ssh/server.py" --device "$1" --listen "$ip:2222" > "$STATE/ssh-$1.log" 2>&1 &
 }
 
 librenms_up() {
@@ -58,7 +70,8 @@ part_down() {
   case "$1" in
     floorbit) pattern="gunicorn --bind 127.0.0.1:5000" ;;
     librenms) pattern="$LAB/librenms_lite/server.py" ;;
-    *) pattern="snmpsim-command-responder --data-dir=$LAB/snmp/data/$1 " ;;
+    *) pattern="snmpsim-command-responder --data-dir=$STATE/snmp/$1 "
+       pkill -f "switch_ssh/server.py --device $1 " || true ;;
   esac
   pkill -f "$pattern" || true
   # Gone before it is started again: gunicorn takes a moment to let go of its port.
@@ -85,7 +98,7 @@ start() {
   $PY "$LAB/e2e/setup.py" --url http://127.0.0.1:5000 --out "$STATE/keys" --password lab-admin-password \
     --librenms-url http://127.0.0.1:18000 --syslog-port 5524 --flows-port 2065 --captive 127.0.0.1:8908 \
     --front-door 127.0.0.1:8443 --captive-proxies 127.0.0.1 --listeners-on agent-a --telemetry-on agent-a --snmp-devices "$(spec)" \
-    agent-a agent-b
+    --ssh-port 2222 agent-a agent-b
 
   # Telegraf runs inside each agent, as in the image: the one on the PATH (or TELEGRAF=...).
   # Traps stay off here: every device is 127.0.0.1, so a trap couldn't say which one it is.
@@ -115,7 +128,8 @@ e2e() {
   command -v "${TELEGRAF:-telegraf}" > /dev/null || export LAB_TELEGRAF=0
   LAB_FLOORBIT_URL=http://127.0.0.1:5000 LAB_ADMIN_PASSWORD=lab-admin-password \
     LAB_AGENT_METRICS=agent-a=http://127.0.0.1:9520 \
-    LAB_CAPTIVE=http://127.0.0.1:8908 LAB_FRONT_DOOR=http://127.0.0.1:8443 $PY -m pytest -q "$LAB/e2e" "$@"
+    LAB_CAPTIVE=http://127.0.0.1:8908 LAB_FRONT_DOOR=http://127.0.0.1:8443 LAB_SSH=${LAB_SSH:-0} \
+    $PY -m pytest -q "$LAB/e2e" "$@"
 }
 
 stop() {
@@ -123,7 +137,8 @@ stop() {
   pkill -f "telegraf --config $STATE/" || true   # the agents' own, should one outlive them
   pkill -f "floorbit_agent" || true
   pkill -f "$LAB/librenms_lite/server.py" || true
-  pkill -f "snmpsim-command-responder --data-dir=$LAB" || true
+  pkill -f "snmpsim-command-responder --data-dir=$STATE/snmp" || true
+  pkill -f "$LAB/switch_ssh/server.py" || true
   pkill -f "gunicorn --bind 127.0.0.1:5000" || true
   redis-cli -p 6390 shutdown nosave 2>/dev/null || true
 }
