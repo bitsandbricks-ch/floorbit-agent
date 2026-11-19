@@ -8,6 +8,10 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Settings from Floorbit: the agent's page in Floorbit sets where laptops reach it, its metrics port and token, its disk buffer, the Telegraf port and VRRP. The agent keeps them in its state folder and starts with them; its own environment variables still win, and the report says where each value comes from and which wait for a restart. What the hall allows (actions, plugin updates, the networks it may reach) stays in its environment only.
+- Key rolling without editing the environment: asked on its page in Floorbit, the agent fetches a new key, keeps it in its state folder and uses it from then on. When that key is refused (enrolled again), it goes back to `FLOORBIT_AGENT_KEY`.
+- Certificates from Floorbit's agents CA: the agent makes its own key, Floorbit signs it for the names listed on the agent's page, and the HTTPS listeners serve with it; renewed 30 days before the end. `FLOORBIT_AGENT_TLS_CERT` set in the hall wins.
+
 - A status page on the agent itself: `http://<agent>:9520/` (and `/status.json`) shows at a glance whether it reaches Floorbit, its numbers, and each plugin's state, with telemetry's points, devices heard and failing and what fails. Read only and open like `/healthz`; no scripts or forms, and nothing secret on it.
 - Telegraf is in the image (1.40.3), and Floorbit's Telemetry plugin runs it inside the agent: device telemetry needs no `telegraf` container and no `--profile telemetry`. `compose.yml` publishes 162/udp (traps) and 57000 (MDT) by default. `FLOORBIT_TELEGRAF=sidecar` keeps the old container. The test lab runs it the same way, without its telegraf service. Floorbit then shows why a device sends nothing, per device, and has Test now and Raw data (Floorbit's docs/agent.md, "Telegraf").
 - Plugin health can carry a hint code, which the hosted page turns into a translated sentence with a link.

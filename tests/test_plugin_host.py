@@ -624,3 +624,26 @@ def test_a_long_healthy_run_resets_the_backoff(setup, monkeypatch):
 
     ctx.thread(flaky).join(5)
     assert waits == [5, 10, 5, 10]
+
+
+def test_the_plugin_config_brings_the_block_and_a_certificate_restarts_https_plugins(setup, monkeypatch):
+    host, fake, agent, _ = setup
+    taken = []
+    monkeypatch.setattr(agent, "take_hosted", taken.append)
+    real_get = fake.get
+
+    def get(url, params=None, headers=None, timeout=None):
+        resp = real_get(url, params, headers, timeout)
+        if url.endswith("/api/agent/v1/plugins") and resp.status_code == 200:
+            resp._body["agent"] = {"settings": {"lan_url": "http://192.0.2.10:8908"}}
+        return resp
+    monkeypatch.setattr(fake, "get", get)
+    host.pull()
+    assert taken == [{"settings": {"lan_url": "http://192.0.2.10:8908"}}]
+    run = host.running["hallthing"]
+    before = type(run.plugin).started
+    host.restart_tls()                                  # serves no HTTPS: left alone
+    assert type(host.running["hallthing"].plugin).started == before
+    run.ctx.tls_wanted = True
+    host.restart_tls()
+    assert type(host.running["hallthing"].plugin).started == before + 1

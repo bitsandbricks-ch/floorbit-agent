@@ -378,8 +378,9 @@ class Agent:
     def __init__(self, url, key, execute, http=None, version='0', log=print):
         import requests
         self.url = url.rstrip('/')
-        self.lan_url = os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
         self.key = key
+        self.key_source = 'env'   # 'stored' once fetched from Floorbit (hosted.py), 'file' from KEY_FILE
+        self.hosted = None        # hosted.Hosted: what Floorbit sets on this agent's page
         self.execute = execute
         self.http = http or _no_redirects(requests)
         self.version = version
@@ -410,6 +411,41 @@ class Agent:
         self.metrics.collect(self._gauges)
         self.plugins = None       # plugin_host.PluginHost, once main() starts it
         self.on_connect = []      # called after each hello that got through (env_settings.Sender)
+
+    @property
+    def lan_url(self):
+        # Read each time: Floorbit can set it on the agent's page (hosted.py), and the env wins.
+        return os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
+
+    def take_hosted(self, block):
+        """The ``agent`` block of the plugin config: settings, a key to fetch, the certificate's
+        names (hosted.py). Never fatal: the plugins still start with what the agent has."""
+        from . import hosted
+        h = self.hosted
+        if h is None or not isinstance(block, dict):
+            return
+        h.settings.take(block.get('settings'))
+        if block.get('roll_key'):
+            try:
+                hosted.fetch_key(self, h.root, log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f'[agent] could not fetch the new key: {type(exc).__name__}: {exc}')
+        try:
+            if h.cert.wanted(block.get('cert')) and h.cert.fetch(self, block['cert']) and self.plugins is not None:
+                self.plugins.restart_tls()
+        except Exception as exc:  # noqa: BLE001
+            h.cert.failed_at = time.time()
+            self.log(f'[agent] could not get a certificate from Floorbit: {type(exc).__name__}: {exc}')
+
+    def hosted_report(self):
+        h = self.hosted
+        if h is None:
+            return None
+        out = {**h.settings.report(), 'key': self.key_source}
+        cert = h.cert.report()
+        if cert:
+            out['cert'] = cert
+        return out
 
     def connected(self):
         """Tell on_connect that a hello got through. One that fails must not drop the link."""
@@ -538,6 +574,7 @@ class Agent:
             'front_door_failed': m.total('floorbit_agent_front_door_requests_total', outcome='failed'),
             # Where laptops in the hall reach this agent, for Floorbit's seat walk-through.
             **({'lan_url': self.lan_url} if self.lan_url else {}),
+            **({'settings': self.hosted_report()} if self.hosted is not None else {}),
             **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
             **({'updates': self.plugins.updater.report()}
                if getattr(self.plugins, 'updater', None) is not None else {}),
@@ -918,8 +955,13 @@ def main(argv=None):
         from .bundles import cli
         return cli(argv[1:], state_root())
     url = os.environ.get('FLOORBIT_URL', '').strip()
-    key = (os.environ.get('FLOORBIT_AGENT_KEY', '').strip()
-           or key_from_file(os.environ.get('FLOORBIT_AGENT_KEY_FILE', '')))
+    os.environ.setdefault('FLOORBIT_DATA_FILE', os.path.abspath('agent-data.json'))
+    from . import hosted as hosted_mod
+    # A key fetched from Floorbit (hosted.py) wins: the env's is the one the agent was enrolled with.
+    stored = hosted_mod.stored_key(state_root())
+    env_key = os.environ.get('FLOORBIT_AGENT_KEY', '').strip()
+    key_source = 'stored' if stored else 'env' if env_key else 'file'
+    key = stored or env_key or key_from_file(os.environ.get('FLOORBIT_AGENT_KEY_FILE', ''))
     if not url or not key:
         print('Set FLOORBIT_URL (the hosted Floorbit) and FLOORBIT_AGENT_KEY (from Settings > Local agents).',
               file=sys.stderr)
@@ -946,7 +988,11 @@ def main(argv=None):
     env_settings.ignore(sources.registry)
     version = agent_version()
     plugins_ref = {}
+    # Before the plugins and listeners start: they read what Floorbit set last time (hosted.py).
+    hosted = hosted_mod.Hosted(state_root())
     agent = Agent(url, key, local_executor(app, plugins_ref), version=version)
+    agent.key_source = key_source
+    agent.hosted = hosted
     agent.heartbeat = heartbeat_file()
     agent.on_connect.append(handover.send)
     host = plugins_ref['host'] = start_plugins(agent, app)
@@ -978,7 +1024,17 @@ def main(argv=None):
     # docker stop sends SIGTERM: leave the way Ctrl+C does, so the plugins stop cleanly.
     signal.signal(signal.SIGTERM, _stop_on_term)
     try:
-        agent.run()
+        try:
+            agent.run()
+        except Refused:
+            if agent.key_source != 'stored' or not env_key or env_key == agent.key:
+                raise
+            # The fetched key was refused: the agent was enrolled again, with the key in the env.
+            print('[agent] the key fetched from Floorbit was refused; trying FLOORBIT_AGENT_KEY', flush=True)
+            hosted_mod.drop_stored_key(state_root())
+            agent.key, agent.key_source = env_key, 'env'
+            os.environ['FLOORBIT_AGENT_KEY'] = env_key
+            agent.run()
     except Refused as exc:
         print(f'[agent] {exc}', file=sys.stderr)
         return 1

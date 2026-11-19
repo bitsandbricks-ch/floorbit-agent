@@ -62,6 +62,31 @@ python -m floorbit_agent health    # 0 when the hosted Floorbit answered in the 
 Every setting, what works through the agent and the protocol are in Floorbit's
 [docs/agent.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md).
 
+## Settings from Floorbit
+
+Each agent's page in Floorbit (**Local agents**, one agent, **Settings**) sets where laptops reach
+it, its metrics port and token, its disk buffer, the Telegraf port, VRRP and the plugin settings that
+differ on this agent (the flow port, a listen address). The agent takes them with its plugin config,
+keeps them in its state folder (`agent-settings.json`) and starts with them next time. Its own
+environment variable still wins when it is set; the page shows where each value comes from and
+which take effect at the next start.
+
+What the hall allows stays in the agent's environment only and is shown read-only:
+`FLOORBIT_AGENT_ALLOW_ACTIONS`, `FLOORBIT_AGENT_PLUGIN_UPDATES` and the networks it may reach
+(`FLOORBIT_AGENT_SWITCH_NETS`, `_GAME_NETS`, `_PROBE_NETS`). A stolen Floorbit login can't widen
+them.
+
+**New key.** *Roll key* on the agent's page has the agent fetch a new key itself and keep it in its
+state folder (`agent-key`, readable only by the agent). From then on it wins over
+`FLOORBIT_AGENT_KEY`, which only enrols. The old key works until the new one is used. When the
+stored key is refused (the agent was enrolled again), the agent sets it aside and uses the env's.
+
+**Certificate.** With the names the agent is reached by listed on its page, the agent makes its own
+key (`tls/agent-key.pem`, it never leaves the machine), Floorbit's agents CA signs it, and the
+plugins' HTTPS listeners (the front door, the telemetry listener) serve with it. It asks again 30
+days before the end. Install the CA (*Download CA* on the Local agents page) on crew devices once.
+`FLOORBIT_AGENT_TLS_CERT` and `_KEY` set by the hall win.
+
 ## Settings from an older agent
 
 An agent before this one read LibreNMS, NetBox, `FLOORBIT_PLUGIN_*`, `FLOORBIT_AGENT_PLUGINS` and
