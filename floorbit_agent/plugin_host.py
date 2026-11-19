@@ -104,6 +104,7 @@ class AgentContext:
         self.stopping = threading.Event()
         self.health_ = Health()
         self.tls = False
+        self.tls_wanted = False
         self._threads = []
         self._closers = []
         self.state_dir = os.path.join(host.state_root, 'plugins', plugin_id)
@@ -323,6 +324,7 @@ class AgentContext:
         ``tls=True`` serves HTTPS with FLOORBIT_AGENT_TLS_CERT and FLOORBIT_AGENT_TLS_KEY when the
         hall set them, and plain HTTP (said once in the log) when it didn't. ``self.tls`` tells which."""
         ctx = self
+        self.tls_wanted = self.tls_wanted or tls     # a new certificate restarts it (restart_tls)
         context = self._tls_context() if tls else None
 
         class Handler(BaseHTTPRequestHandler):
@@ -497,6 +499,9 @@ class PluginHost:
         other = ha.get('stand_by_for')
         self.stand_by_for = other if isinstance(other, str) and other else None
         self._ha_heard = time.monotonic()
+        if isinstance(body.get('agent'), dict):
+            # Before apply: a plugin started now reads the settings (Telegraf's port, TLS) it brings.
+            self.agent.take_hosted(body['agent'])
         if self.updater is not None:
             # Before apply, so a plugin turned on together with its update starts on the new version.
             self.updater.offer(self, body.get('bundles') or {})
@@ -590,6 +595,14 @@ class PluginHost:
             self.log(f'[agent] plugin {pid} failed to stop cleanly: {error}')
         run.ctx.close()
         self.log(f'[agent] plugin {pid} stopped ({why})')
+
+    def restart_tls(self):
+        """A new certificate (hosted.py): the plugins serving HTTPS start again with it."""
+        with self._lock:
+            for pid in [p for p, run in self.running.items() if getattr(run.ctx, 'tls_wanted', False)]:
+                config = self.running[pid].config
+                self._stop_one(pid, 'new certificate')
+                self._start(pid, config)
 
     # the loop -----------------------------------------------------------------------------
     def start(self):
