@@ -83,10 +83,6 @@ def plugins(fb, args):
         # The front door (check-in, the note on phones, the seat walk) is on by default with its own
         # addresses, as on a fresh agent: only the tests' stand-in reverse proxy is named here.
         'plugin.front-door.proxies': args.proxies,
-        # With LibreNMS on, Telemetry would leave port polling and the ARP and MAC tables to it
-        # (floorbit #945). The lab runs both to test both: Telemetry polls everything here, and the
-        # LibreNMS paths are still tested where Floorbit asks it (lookups, port status).
-        'plugin.telemetry.polling': 'telemetry',
     }
     if args.front_door:
         settings['plugin.front-door.address'] = args.front_door

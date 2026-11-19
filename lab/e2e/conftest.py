@@ -79,6 +79,11 @@ class Floorbit:
     def post(self, path, body=None, **kw):
         return self.s.post(f'{self.url}{path}', json=body, timeout=60, **kw)
 
+    def patch(self, path, body, **kw):
+        r = self.s.patch(f'{self.url}{path}', json=body, timeout=60, headers={'Origin': self.url}, **kw)
+        r.raise_for_status()
+        return r.json()
+
 
 @pytest.fixture(scope='session')
 def lab():
