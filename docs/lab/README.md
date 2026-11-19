@@ -199,6 +199,8 @@ model-driven telemetry by node name on the core, the firewalls' own push. Only a
 (without VRRP both agents would count as the collector), and the Telegraf inside agent A's image
 runs the config it writes, as at an event; the devices send their traps to agent A. The core's replay also streams gNMI and Cisco MDT counters for its ports, and the
 firewalls push CPU, memory and pf states, both to agent A's port 8186 with its ingest token.
+Telemetry's "Who polls the switches" is set to Telemetry: at an event with LibreNMS, LibreNMS polls the
+ports and tables and Telemetry keeps traps, facts and streams, but the lab runs both and tests both.
 
 `lab/run-local.sh` hands the agents the Telegraf on the PATH (or `TELEGRAF=/path/to/telegraf`) to run
 themselves; without it the tests that need it skip. Traps stay off locally: every device is 127.0.0.1 there, so
