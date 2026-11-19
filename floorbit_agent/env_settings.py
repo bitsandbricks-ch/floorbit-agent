@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 
+from . import logs
+
 # The relays the agent ran itself before they were plugins: variable -> the plugin's setting.
 OLD_RELAYS = {
     'FLOORBIT_AGENT_SYSLOG_PORT': 'plugin.syslog-relay.port',
@@ -67,7 +69,7 @@ def ignore(registry):
 class Sender:
     """Sends what the environment set once, after the agent got through to the hosted Floorbit."""
 
-    def __init__(self, registry, state_root, env=None, log=print):
+    def __init__(self, registry, state_root, env=None, log=logs.say):
         self.settings, self.plugins, self.names = collect(registry, env)
         self.path = os.path.join(state_root, FILE)
         self.log = log

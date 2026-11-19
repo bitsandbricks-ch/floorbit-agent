@@ -32,7 +32,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlsplit
 
-from . import http_limits
+from . import http_limits, logs
 
 PATH = '/.well-known/captive-portal'
 HELLO_PATH = re.compile(r'^/floorbit/hello/([A-Za-z0-9_-]{16,64})\Z')
@@ -52,7 +52,7 @@ def _ip(text):
 
 
 class Captive:
-    def __init__(self, ask, portal_url='', proxies=(), log=print, say_hello=None, floorbit_url=''):
+    def __init__(self, ask, portal_url='', proxies=(), log=logs.say, say_hello=None, floorbit_url=''):
         self.ask = ask                       # () -> {"done": [ip], "portal_url"}; RuntimeError: off there
         self.say_hello = say_hello           # (code, ip) -> None; raises when the hosted side refuses
         self.floorbit_url = floorbit_url.rstrip('/')
@@ -156,7 +156,7 @@ class Captive:
         self._stop.set()
 
 
-def serve(captive, address, log=print):
+def serve(captive, address, log=logs.say):
     """Start the endpoint and the refresh in threads; returns the server, or None when off.
     Raises ValueError or OSError when the address is wrong or taken."""
     address = (address or '').strip()

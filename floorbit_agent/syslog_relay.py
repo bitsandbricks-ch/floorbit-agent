@@ -22,6 +22,8 @@ import threading
 import time
 from collections import deque
 
+from . import logs
+
 MAX_LINE = 2048          # as floorbit/syslog.py
 BACKLOG = 20_000
 RECEIVE_BUFFER = 8 * 1024 ** 2   # bytes asked of the kernel (capped at net.core.rmem_max)
@@ -39,7 +41,7 @@ class TurnedOff(RuntimeError):
 
 
 class Relay:
-    def __init__(self, send, port, bind='0.0.0.0', backlog=BACKLOG, log=print, spool=None):
+    def __init__(self, send, port, bind='0.0.0.0', backlog=BACKLOG, log=logs.say, spool=None):
         """``send(lines, dropped)`` posts one batch; it raises on failure. ``spool``: a
         spool.Spool for the lines that can't be sent now; without it they wait in memory."""
         self.send = send
