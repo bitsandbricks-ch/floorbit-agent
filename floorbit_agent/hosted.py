@@ -46,6 +46,9 @@ TLS_DIR = 'tls'
 CA_NAME = 'Floorbit local agents CA'
 RENEW_DAYS = 30
 CERT_RETRY = 600          # seconds between tries after the hosted side said no
+# The tenant's Let's Encrypt certificate (floorbit/public_cert.py): its key comes sealed to ours.
+SEAL_ALG = 'ECDH-ES+A256GCM'
+SEAL_INFO = b'floorbit agent tls key v1'
 
 
 def _write_private(path, text):
@@ -200,6 +203,24 @@ def fetch_key(agent, root, log=print):
     return True
 
 
+def open_sealed(private_key, box):
+    """The key Floorbit sealed to ours (floorbit/public_cert.py seal_to): ECDH P-256, HKDF-SHA256,
+    AES-256-GCM."""
+    import base64
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    if not isinstance(box, dict) or box.get('alg') != SEAL_ALG:
+        raise ValueError('Floorbit sent the key in a form this agent does not know.')
+    epk = base64.b64decode(box['epk'])
+    peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), epk)
+    secret = HKDF(algorithm=hashes.SHA256(), length=32, salt=epk, info=SEAL_INFO).derive(
+        private_key.exchange(ec.ECDH(), peer))
+    return AESGCM(secret).decrypt(base64.b64decode(box['nonce']), base64.b64decode(box['data']), SEAL_INFO).decode()
+
+
 # ── the certificate ─────────────────────────────────────────────────────────────────────────────
 
 class Certificate:
@@ -210,6 +231,7 @@ class Certificate:
         self.now = now
         self.hall_set = bool(str(self.env.get('FLOORBIT_AGENT_TLS_CERT') or '').strip())
         self.failed_at = 0
+        self.public_failed_at = 0
         if not self.hall_set and os.path.exists(self.cert_path) and os.path.exists(self.key_path):
             self._use()
 
@@ -219,11 +241,21 @@ class Certificate:
 
     @property
     def key_path(self):
+        """The agent's own key: signs its requests, opens the shared key. Never leaves this machine."""
         return os.path.join(self.dir, 'agent-key.pem')
+
+    @property
+    def shared_key_path(self):
+        """The tenant's Let's Encrypt key, when agent.pem is that certificate."""
+        return os.path.join(self.dir, 'public-key.pem')
+
+    @property
+    def public(self):
+        return os.path.exists(self.shared_key_path)
 
     def _use(self):
         self.env['FLOORBIT_AGENT_TLS_CERT'] = self.cert_path
-        self.env['FLOORBIT_AGENT_TLS_KEY'] = self.key_path
+        self.env['FLOORBIT_AGENT_TLS_KEY'] = self.shared_key_path if self.public else self.key_path
 
     def _read(self, path=None):
         """(names, not_after, issuer CN) of a certificate file, or None."""
@@ -257,7 +289,7 @@ class Certificate:
             issued = os.path.getmtime(self.cert_path)
         except OSError:
             issued = 0
-        return (sorted(names) != sorted(str(n) for n in block['names'])
+        return (self.public or sorted(names) != sorted(str(n) for n in block['names'])
                 or not_after - self.now() < RENEW_DAYS * 86400
                 or (block.get('asked') or 0) > issued)
 
@@ -295,8 +327,77 @@ class Certificate:
             self.failed_at = self.now()
             return False
         _write_private(self.cert_path, pem)
+        if self.public:
+            os.remove(self.shared_key_path)
         self._use()
         self.log(f'[agent] new certificate from Floorbit for {", ".join(names)}')
+        return True
+
+    # ── the tenant's Let's Encrypt certificate ──
+
+    def _own_key(self):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        try:
+            with open(self.key_path, 'rb') as f:
+                key = serialization.load_pem_private_key(f.read(), None)
+            if isinstance(key, ec.EllipticCurvePrivateKey) and isinstance(key.curve, ec.SECP256R1):
+                return key
+        except (OSError, ValueError):
+            pass
+        key = ec.generate_private_key(ec.SECP256R1())
+        _write_private(self.key_path, key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode())
+        return key
+
+    def public_wanted(self, block):
+        """Does Floorbit's ``{"name", "asked"}`` call for its Let's Encrypt certificate?"""
+        if self.hall_set or not isinstance(block, dict) or not block.get('name'):
+            return False
+        if self.now() - self.public_failed_at < CERT_RETRY:
+            return False
+        found = self._read() if self.public else None
+        if found is None:
+            return True
+        try:
+            issued = os.path.getmtime(self.cert_path)
+        except OSError:
+            issued = 0
+        return found[0] != [str(block['name'])] or (block.get('asked') or 0) > issued
+
+    def fetch_public(self, agent, block):
+        """Fetch the tenant's certificate and its key, sealed to our own key. True when it changed."""
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.x509.oid import NameOID
+        key = self._own_key()
+        csr = (x509.CertificateSigningRequestBuilder()
+               .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, str(block['name'])[:64])]))
+               .sign(key, hashes.SHA256()))
+        resp = agent.http.post(f'{agent.url}/api/agent/v1/cert', headers=agent._headers(json_body=True),
+                               data=json.dumps({'csr': csr.public_bytes(serialization.Encoding.PEM).decode(),
+                                                'public': True}), timeout=30)
+        if resp.status_code in (400, 409):
+            self.public_failed_at = self.now()
+            try:
+                why = resp.json().get('error')
+            except ValueError:
+                why = None
+            self.log(f'[agent] no Let\'s Encrypt certificate from Floorbit yet: {why or resp.status_code}')
+            return False
+        body = agent._check(resp)
+        pem = str(body.get('cert') or '')
+        shared = open_sealed(key, body.get('key'))
+        leaf = x509.load_pem_x509_certificates(pem.encode())[0]
+        shared_key = serialization.load_pem_private_key(shared.encode(), None)
+        if leaf.public_key().public_numbers() != shared_key.public_key().public_numbers():
+            self.public_failed_at = self.now()
+            self.log('[agent] the Let\'s Encrypt certificate and its key from Floorbit do not match; kept the old one')
+            return False
+        _write_private(self.shared_key_path, shared)
+        _write_private(self.cert_path, pem)
+        self._use()
+        self.log(f'[agent] Let\'s Encrypt certificate from Floorbit for {block["name"]}')
         return True
 
     def report(self):
@@ -308,7 +409,7 @@ class Certificate:
             return None
         names, not_after, issuer = found
         return {'names': names, 'not_after': not_after, 'source': 'env' if self.hall_set else 'floorbit',
-                'floorbit_ca': issuer == CA_NAME}
+                'floorbit_ca': issuer == CA_NAME, 'public': not self.hall_set and self.public}
 
 
 

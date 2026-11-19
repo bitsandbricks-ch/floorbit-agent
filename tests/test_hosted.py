@@ -15,12 +15,18 @@ class Hosted:
         self.posts = []
         self.key_status = 200
         self.cert_status = 200
+        self.public_status = 200
+        self.public_name = "club.agent.example.com"
 
     def post(self, url, data=None, headers=None, timeout=None):
         self.posts.append((url, headers, json.loads(data) if data else None))
         if url.endswith("/api/agent/v1/key"):
             return Resp(self.key_status, {"key": "fba_0a1b2c3d_" + "n" * 30} if self.key_status == 200 else
                         {"error": "No new key was asked for this agent."})
+        if url.endswith("/api/agent/v1/cert") and json.loads(data).get("public"):
+            if self.public_status != 200:
+                return Resp(self.public_status, {"error": "The agents' Let's Encrypt certificate isn't there yet."})
+            return Resp(200, public_bundle(json.loads(data)["csr"], self.public_name))
         if url.endswith("/api/agent/v1/cert"):
             if self.cert_status != 200:
                 return Resp(self.cert_status, {"error": "List the names first."})
@@ -29,6 +35,42 @@ class Hosted:
 
 
 CA = {}
+
+
+def public_bundle(csr_pem, name):
+    """A stand-in for floorbit/public_cert.py: a certificate for ``name`` and its key, sealed to the
+    key in the agent's request."""
+    import base64
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.datetime.now(datetime.UTC)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    cert = (x509.CertificateBuilder().subject_name(subject)
+            .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Fake Let's Encrypt")]))
+            .public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(now)
+            .not_valid_after(now + datetime.timedelta(days=90))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(name)]), critical=False)
+            .sign(key, hashes.SHA256()))
+    key_pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption())
+    agent_pub = x509.load_pem_x509_csr(csr_pem.encode()).public_key()
+    eph = ec.generate_private_key(ec.SECP256R1())
+    epk = eph.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    secret = HKDF(algorithm=hashes.SHA256(), length=32, salt=epk, info=hosted.SEAL_INFO).derive(
+        eph.exchange(ec.ECDH(), agent_pub))
+    nonce = os.urandom(12)
+    data = AESGCM(secret).encrypt(nonce, key_pem, hosted.SEAL_INFO)
+    enc = base64.b64encode
+    return {"name": name, "cert": cert.public_bytes(serialization.Encoding.PEM).decode(),
+            "key": {"alg": hosted.SEAL_ALG, "epk": enc(epk).decode(), "nonce": enc(nonce).decode(),
+                    "data": enc(data).decode()}}
 
 
 def sign(csr_pem):
@@ -145,6 +187,58 @@ def test_a_certificate_the_hall_set_wins_and_a_refusal_waits(agent, tmp_path):
     assert len(agent.http.posts) == asked                     # not again within CERT_RETRY
 
 
+
+
+def test_the_tenant_s_lets_encrypt_certificate_wins_and_its_key_comes_sealed(agent, tmp_path):
+    env = {}
+    agent.hosted = hosted.Hosted(str(tmp_path), env=env, log=lambda *_: None)
+    restarted = []
+    agent.plugins = type("P", (), {"restart_tls": lambda self: restarted.append(1), "report": lambda self: {}})()
+    # Not there yet: the CA's keeps the listeners up meanwhile.
+    agent.http.public_status = 409
+    ca_block = {"names": ["192.0.2.10"], "asked": 0}
+    agent.take_hosted({"settings": {}, "cert": ca_block, "public_cert": {"name": "club.agent.example.com", "asked": 1}})
+    assert [b.get("public") for _, _, b in agent.http.posts] == [True, None]
+    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem") and restarted == [1]
+    agent.hosted.cert.public_failed_at = 0
+    agent.http.public_status = 200
+    block = {"name": "club.agent.example.com", "asked": 1}
+    agent.take_hosted({"settings": {}, "cert": ca_block, "public_cert": block})
+    _, _, body = agent.http.posts[-1]
+    assert body["public"] is True and "PRIVATE" not in body["csr"]
+    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("public-key.pem") and restarted == [1, 1]
+    assert oct(os.stat(env["FLOORBIT_AGENT_TLS_KEY"]).st_mode & 0o777) == "0o600"
+    with open(env["FLOORBIT_AGENT_TLS_KEY"]) as f:
+        assert "BEGIN PRIVATE KEY" in f.read()
+    report = agent.report()["settings"]["cert"]
+    assert report["names"] == ["club.agent.example.com"] and report["public"] and not report["floorbit_ca"]
+    cert = agent.hosted.cert
+    assert not cert.public_wanted(block)
+    assert cert.public_wanted({**block, "asked": os.path.getmtime(cert.cert_path) + 10})    # renewed on Floorbit
+    # Restarted, it serves the shared key; the domain gone, it goes back to the CA's.
+    env2 = {}
+    hosted.Certificate(str(tmp_path), env2)
+    assert env2["FLOORBIT_AGENT_TLS_KEY"].endswith("public-key.pem")
+    agent.take_hosted({"settings": {}, "cert": ca_block})
+    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem") and not cert.public
+
+
+def test_a_sealed_key_for_another_agent_is_refused(agent, tmp_path):
+    from cryptography.hazmat.primitives.asymmetric import ec
+    box = public_bundle(_csr_of(ec.generate_private_key(ec.SECP256R1())), "club.agent.example.com")["key"]
+    with pytest.raises(Exception):  # noqa: B017  # AES-GCM: InvalidTag
+        hosted.open_sealed(ec.generate_private_key(ec.SECP256R1()), box)
+    with pytest.raises(ValueError):
+        hosted.open_sealed(ec.generate_private_key(ec.SECP256R1()), {"alg": "none"})
+
+
+def _csr_of(key):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.x509.oid import NameOID
+    csr = (x509.CertificateSigningRequestBuilder()
+           .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "agent")])).sign(key, hashes.SHA256()))
+    return csr.public_bytes(serialization.Encoding.PEM).decode()
 
 
 def test_log_level_from_floorbit_now_and_hall_alias_wins(tmp_path, monkeypatch):

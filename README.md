@@ -88,6 +88,13 @@ plugins' HTTPS listeners (the front door, the telemetry listener) serve with it.
 days before the end. Install the CA (*Download CA* on the Local agents page) on crew devices once.
 `FLOORBIT_AGENT_TLS_CERT` and `_KEY` set by the hall win.
 
+**Let's Encrypt.** When the hosted Floorbit has a domain for its agents, it sends the tenant's
+Let's Encrypt certificate for `<tenant>.agent.<domain>` instead, so laptops trust the front door
+without a CA. All the tenant's agents share that certificate's key: Floorbit sends it encrypted to
+the agent's own key (ECDH P-256, HKDF-SHA256, AES-256-GCM), and the agent keeps it in
+`tls/public-key.pem` (0600). Until it arrives, the CA's certificate keeps the listeners up. Point the
+name at the agent in the hall's DNS.
+
 ## Settings from an older agent
 
 An agent before this one read LibreNMS, NetBox, `FLOORBIT_PLUGIN_*`, `FLOORBIT_AGENT_PLUGINS` and
