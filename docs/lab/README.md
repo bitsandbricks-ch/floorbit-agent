@@ -103,7 +103,8 @@ on and the SNMP v2c community `public`. What each device needs on top (`telemetr
 `telemetry_mdt_node`, `telemetry_vlans`) is what `telemetry()` in `lab/e2e/setup.py` sets.
 
 Without Docker (a laptop or a sandbox), every part as a process on 127.0.0.1; needs redis-server,
-net-snmp's tools, snmpsim, gunicorn and Floorbit's requirements:
+net-snmp's tools, snmpsim with pysmi (`pip install snmpsim==1.2.2 pysmi==2.0.0`, as in `lab/Dockerfile`:
+snmpsim imports pysmi without declaring it), gunicorn and Floorbit's requirements:
 
 ```sh
 FLOORBIT_SRC=../floorbit lab/run-local.sh start
