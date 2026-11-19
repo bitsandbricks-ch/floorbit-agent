@@ -115,8 +115,8 @@ The LAN cache numbers are skipped until Floorbit has them (bitsandbricks-ch/floo
 
 ## Telemetry
 
-Setup turns on Floorbit's Telemetry plugin with every lab device as a target, as the crew would
-under Settings > Telemetry: SNMP v2c for all, MAC tables per seat VLAN on the Catalysts, Cisco
+Setup turns on Floorbit's Telemetry plugin and sets every lab device up for it in the inventory, as
+the crew would: the Telemetry feature and an SNMP v2c login for all devices, MAC tables per seat VLAN on the Catalysts, Cisco
 model-driven telemetry by node name on the core, the firewalls' own push. Only agent A collects
 (without VRRP both agents would count as the collector), and the Telegraf inside agent A's image
 runs the config it writes, as at an event; the devices send their traps to agent A. The core's replay also streams gNMI and Cisco MDT counters for its ports, and the

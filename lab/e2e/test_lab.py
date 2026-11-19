@@ -223,7 +223,7 @@ def _series(fb, device, metric, port=None):
 
 
 def test_every_device_reports_telemetry(fb, lab):
-    """Settings > Telemetry has every lab device; the agent's collector hears from each."""
+    """Monitoring > Telemetry has every lab device; the agent's collector hears from each."""
     def all_up():
         items = fb.get('/api/plugins/telemetry/widgets/devices')['items']
         return items if {i['label'] for i in items if i['state'] == 'up'} >= {d.name for d in lab.devices} else None
