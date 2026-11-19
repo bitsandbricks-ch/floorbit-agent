@@ -14,12 +14,14 @@ import threading
 
 from floorbit.flows.collector import Collector
 
+from . import logs
+
 RECEIVE_BUFFER = 8 * 1024 ** 2
 READ_TIMEOUT = 1.0
 
 
 class FlowsRelay:
-    def __init__(self, agent, port, bind='0.0.0.0', collector=None, log=print):
+    def __init__(self, agent, port, bind='0.0.0.0', collector=None, log=logs.say):
         self.agent = agent
         self.port = port
         self.bind = bind

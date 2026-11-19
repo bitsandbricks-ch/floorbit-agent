@@ -14,13 +14,15 @@ import re
 import threading
 import time
 
+from . import logs
+
 MAX_BYTES = 2 * 1024 ** 3
 MAX_AGE = 24 * 3600
 _NAME = re.compile(r'^(\d{12})\.jsonl\Z')
 
 
 class Spool:
-    def __init__(self, folder, max_bytes=MAX_BYTES, max_age=MAX_AGE, log=print):
+    def __init__(self, folder, max_bytes=MAX_BYTES, max_age=MAX_AGE, log=logs.say):
         self.folder = folder
         self.max_bytes = max_bytes
         self.max_age = max_age
