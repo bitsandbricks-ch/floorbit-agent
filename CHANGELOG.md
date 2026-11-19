@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Built on Floorbit #861: the telemetry plugin's log lines (Telegraf started, stopped and reloaded, each Test now and its result, every minute the points per device and the devices that gave nothing).
 - One agent per device: a device whose inventory names an agent (`telemetry_agent`) is polled only by that agent, also while it is the VRRP standby, and goes back to the others while it is away. Telemetry ports per kind (SNMP, gNMI, API). Built on Floorbit with bitsandbricks-ch/floorbit#857.
 - Built on Floorbit with bitsandbricks-ch/floorbit#858 (Telemetry under Monitoring, devices set up only in the inventory). The test lab now sets its devices up for telemetry in the inventory: the Telemetry feature and an SNMP v2c login for all devices, and per device its platform and `telemetry_*` properties.
 - A log worth reading: every line has the time, the level and the part that speaks. It says when the agent connects or loses the link, when a plugin starts, stops, fails or changes state, when Telegraf starts, stops or reloads, each Test now, and every minute what each device gave; a summary line every five minutes (`FLOORBIT_AGENT_LOG_SUMMARY`). `FLOORBIT_AGENT_LOG_LEVEL=debug` adds every call, send and Telegraf line.
