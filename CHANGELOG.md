@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Built on Floorbit #917 (discovery): the telemetry plugin also asks each SNMP device what it is every five minutes (sysDescr, sysLocation, the chassis model and serial, memory, disks, CPUs, and the memory use of Cisco switches), so Floorbit fills its inventory devices from it.
 - Built on Floorbit #861: the telemetry plugin's log lines (Telegraf started, stopped and reloaded, each Test now and its result, every minute the points per device and the devices that gave nothing).
 - Settings from Floorbit: the agent's page in Floorbit sets where laptops reach it, its metrics port and token, its disk buffer, the Telegraf port, the log level (`FLOORBIT_AGENT_LOG_LEVEL`, applied at once) and summary interval (`FLOORBIT_AGENT_LOG_SUMMARY`), and VRRP. The agent keeps them in its state folder and starts with them; its own environment variables still win, and the report says where each value comes from and which wait for a restart. What the hall allows (actions, plugin updates, the networks it may reach) stays in its environment only.
 - Key rolling without editing the environment: asked on its page in Floorbit, the agent fetches a new key, keeps it in its state folder and uses it from then on. When that key is refused (enrolled again), it goes back to `FLOORBIT_AGENT_KEY`.
