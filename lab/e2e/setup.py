@@ -168,6 +168,22 @@ def telemetry(fb, args):
         if status != 200:
             raise SystemExit(f'Setting up telemetry for {dev.name} failed: {status} {answer}')
     print(f'Set up telemetry for {len(LAB.devices)} devices.')
+    if args.trap_v3:
+        trap_user(fb, args.trap_v3, ids)
+
+
+def trap_user(fb, spec, ids):
+    """One device's own SNMPv3 trap user (floorbit#975), as LAB_TRAP_V3 has it: Floorbit gives it
+    a listener of its own on the collecting agent."""
+    device, _, rest = spec.partition('=')
+    login, _, _dest = rest.rpartition('@')
+    user, auth, auth_pass, priv, priv_pass = login.split(':')
+    status, answer = fb.call('PUT', '/api/inventory/credentials', {
+        'owner_type': 'device', 'owner_id': ids[device], 'kind': 'snmp_trap', 'username': user,
+        'auth_protocol': auth, 'secret': auth_pass, 'priv_protocol': priv, 'priv_secret': priv_pass})
+    if status not in (200, 201):
+        raise SystemExit(f'Setting the trap user of {device} failed: {status} {answer}')
+    print(f'{device} sends traps as {user}.')
 
 
 def seed(fb):
@@ -229,6 +245,8 @@ def main(argv=None):
     p.add_argument('--telemetry-on', default='', help='the one agent that collects telemetry')
     p.add_argument('--snmp-devices', default='',
                    help='where Telegraf polls each device, "name=host:port,..." (default: its lab address, port 161)')
+    p.add_argument('--trap-v3', default=os.environ.get('LAB_TRAP_V3', ''),
+                   help="one device's SNMPv3 trap user, as replay.py's LAB_TRAP_V3")
     p.add_argument('--ssh-port', type=int, default=22, help="the switches' SSH port (lab/switch_ssh)")
     # The lab switches' own login (switch_ssh/server.py), not a secret.
     p.add_argument('--ssh-login', default='lab:lab-switch-password', help='user:password')
