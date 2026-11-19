@@ -237,6 +237,32 @@ def test_listeners_stop_with_the_plugin(setup):
         urllib.request.urlopen(req, timeout=2)
 
 
+def test_a_body_sent_in_chunks_arrives_whole(setup):
+    """Telegraf with gzip sends its body in chunks, without a length: it was dropped (a broken
+    pipe in Telegraf's log)."""
+    import gzip
+    import http.client
+
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    got = []
+    port = ctx.listen_http(0, lambda m, p, h, body: (got.append(body), (204, b""))[1], host="127.0.0.1")
+    payload = gzip.compress(b"cpu,device=sw-a-01 value=1\n" * 5000)
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("POST", "/write", body=iter([payload[:7000], payload[7000:]]), encode_chunked=True,
+                 headers={"Transfer-Encoding": "chunked", "Content-Encoding": "gzip"})
+    assert conn.getresponse().status == 204
+    assert got == [payload]
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.putrequest("POST", "/write")
+    conn.putheader("Transfer-Encoding", "chunked")
+    conn.endheaders()
+    conn.send(b"zz\r\nnot hex\r\n0\r\n\r\n")
+    assert conn.getresponse().status == 413
+    host.stop()
+
+
 def test_failed_logins_are_not_tried_again_until_cleared(setup, tmp_path):
     host, _hosted, agent, _lines = setup
     host.pull()
