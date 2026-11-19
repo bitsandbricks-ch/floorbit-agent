@@ -7,11 +7,12 @@ Signs in as the admin, enrols each agent and writes its key to <out>/<name>.key 
 it at start); an agent whose key file is there already is left alone, so a restart keeps its keys.
 It sets up the agents' plugins in Floorbit, as the crew would at an event (the agents read none
 of it from their own environment): the lab LibreNMS, syslog and NetFlow from the hall, the
-check-in note and the front door, and telemetry for every lab device. With --listeners-on, only
-that agent runs the ones that listen (two agents on one machine can't take the same port); with
---telemetry-on, only that agent collects telemetry. Then, if the plan has no seats yet, it adds what
-lab/topology.py describes: the switches and firewalls to the inventory (with their management
-addresses, so syslog finds its device) and one seat block per access switch. Standard library only.
+check-in note and the front door. With --listeners-on, only that agent runs the ones that listen
+(two agents on one machine can't take the same port); with --telemetry-on, only that agent
+collects telemetry. If the plan has no seats yet, it adds what lab/topology.py describes: the
+switches and firewalls to the inventory (with their management addresses, so syslog finds its
+device), one seat block per access switch and the seat ranges each firewall serves. Last, it puts
+every device in an inventory group with Telemetry on. Standard library only.
 """
 import argparse
 import http.cookiejar
@@ -104,29 +105,44 @@ def plugins(fb, args):
 
 
 def telemetry(fb, args):
-    """The Telemetry plugin and its devices (Settings > Telemetry), as the crew would set them up:
-    every switch and firewall polled over SNMP by the agent's Telegraf, Catalyst MAC tables per
-    VLAN, the core's model-driven telemetry by its node name, the firewalls' own Telegraf push."""
+    """Telemetry for every lab device, as the crew would set it up in the inventory: a group with the
+    Telemetry feature on and the SNMP community, each device in it with what its kind needs (MAC
+    tables per VLAN on the Catalysts, model-driven telemetry by node name on the core, the
+    firewalls' own Telegraf push). Floorbit collects what the inventory says (docs/telemetry.md)."""
     where = dict(item.split('=', 1) for item in args.snmp_devices.split(',') if '=' in item)
-    _, have = fb.call('GET', '/api/settings/telemetry')
-    known = {t['name'] for t in (have or {}).get('targets', [])}
+    _, groups = fb.call('GET', '/api/inventory/groups')
+    group = next((g for g in (groups or {}).get('groups', []) if g['name'] == 'Lab telemetry'), None)
+    if group is None:
+        status, group = fb.call('POST', '/api/inventory/groups',
+                                {'name': 'Lab telemetry', 'features': {'telemetry': True}})
+        if status not in (200, 201):
+            raise SystemExit(f'Adding the telemetry group failed: {status} {group}')
+        group = group.get('group', group)
+    status, answer = fb.call('PUT', '/api/inventory/credentials', {
+        'owner_type': 'group', 'owner_id': group['id'], 'kind': 'snmp_v2c', 'secret': 'public'})
+    if status != 200:
+        raise SystemExit(f'Setting the lab SNMP community failed: {status} {answer}')
+    _, inv = fb.call('GET', '/api/inventory')
+    ids = {d['name']: d['id'] for d in inv.get('devices', [])}
     for dev in LAB.devices:
-        if dev.name in known:
-            continue
         host, _, port = where.get(dev.name, dev.ip).partition(':')
-        body = {'name': dev.name, 'address': host, 'port': int(port) if port else None, 'community': 'public',
-                'snmp_version': '2c', 'drivers': ['snmp', 'traps']}
+        props = {'telemetry_address': host, 'telemetry_port_snmp': port}
         if dev.role == 'firewall':
-            body.update(kind='firewall', platform='opnsense', drivers=['snmp', 'push'])
+            platform, props['telemetry_drivers'] = 'OPNsense', 'snmp push'
         elif dev.role == 'core':
-            body.update(platform='nxos', drivers=['snmp', 'traps', 'mdt'], mdt_node=dev.name)
+            platform = 'NX-OS'
+            props.update(telemetry_drivers='snmp traps mdt', telemetry_mdt_node=dev.name)
         else:
+            platform = 'IOS'
             vlans = sorted(SEAT_VLAN.values()) if dev.role == 'distribution' else sorted(
                 {s.vlan for s in LAB.seats if s.switch == dev.name})
-            body.update(platform='ios', fdb='cisco_vlans', vlans=vlans)
-        status, answer = fb.call('POST', '/api/settings/telemetry/targets', body)
-        if status not in (200, 201):
-            raise SystemExit(f'Adding {dev.name} to telemetry failed: {status} {answer}')
+            props.update(telemetry_drivers='snmp traps', telemetry_fdb='cisco_vlans',
+                         telemetry_vlans=' '.join(map(str, vlans)))
+        body = {'group_id': group['id'], 'platform': platform,
+                'properties': {k: v for k, v in props.items() if v}}
+        status, answer = fb.call('PATCH', f'/api/inventory/{ids[dev.name]}', body)
+        if status != 200:
+            raise SystemExit(f'Setting up telemetry for {dev.name} failed: {status} {answer}')
     status, answer = fb.call('PUT', '/api/settings/plugins/telemetry', {'enabled': True})
     if status != 200:
         raise SystemExit(f'Turning on telemetry failed: {status} {answer}')
@@ -160,7 +176,15 @@ def seed(fb):
             'name': block, 'x': 20, 'y': 30 + i * 14, 'cols': SEATS_PER_BLOCK, 'rows': 1})
         if status != 201:
             raise SystemExit(f'Adding block {block} failed: {status} {body}')
-    print(f'Drew the lab hall: {len(LAB.devices)} devices, {len(LAB.seats)} seats.')
+    # The core routes blocks A and B to fw-01, C and D to fw-02, each with the other as its backup.
+    first, second = (fw.name for fw in LAB.firewalls)
+    for i, (block, vlan) in enumerate(SEAT_VLAN.items()):
+        line = [first, second] if i < len(SEAT_VLAN) // 2 else [second, first]
+        status, body = fb.call('POST', '/api/firewalls/ranges', {
+            'cidr': f'10.10.{vlan}.0/24', 'name': f'Block {block}', 'firewalls': line})
+        if status not in (200, 201):
+            raise SystemExit(f'Adding the range of block {block} failed: {status} {body}')
+    print(f'Drew the lab hall: {len(LAB.devices)} devices, {len(LAB.seats)} seats, {len(SEAT_VLAN)} firewall ranges.')
 
 
 def main(argv=None):
@@ -198,8 +222,8 @@ def main(argv=None):
         os.chmod(path, 0o644)        # the agent runs as another user; lab keys only
         print(f'Enrolled {name} as {body["id"]}')
     plugins(fb, args)
-    telemetry(fb, args)
     seed(fb)
+    telemetry(fb, args)
     return 0
 
 

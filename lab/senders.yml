@@ -1,0 +1,85 @@
+# An agent of yours with the lab's simulated event network around it (docs/lab/README.md): the
+# agent connects to your Floorbit like at the event, and every simulated device sends it syslog,
+# traps, NetFlow, the core's gNMI/MDT stream and the firewalls' Telegraf push, and answers SNMP.
+#
+#   cp agent.env.example lab/agent.env     # FLOORBIT_URL and FLOORBIT_AGENT_KEY
+#   docker compose -f lab/senders.yml up -d
+#
+# In Floorbit, turn on the agent's plugins (Settings > Plugins: syslog on 5514, NetFlow on 2055,
+# Telemetry) and add the devices to the inventory with the addresses below (lab/topology.py has
+# their models, ports and seats; SNMP v2c, community public). The devices keep the lab's own
+# addresses, so the agent sees each as itself. Only for a Floorbit you test with: it gets made-up
+# devices, seats and players.
+x-device: &device
+  image: ${LAB_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-lab:latest}
+  command: ["sh", "/lab/device.sh"]
+  restart: unless-stopped
+  environment: &env
+    LAB_SYSLOG_TARGETS: 172.31.10.31:5514
+    LAB_TRAP_TARGETS: 172.31.10.31:1162
+    LAB_REPLAY_EVERY: "10"
+  depends_on: [agent]
+
+x-sending: &sending
+  LAB_PUSH_URL: http://172.31.10.31:8186/write
+  LAB_STREAM_URL: http://172.31.10.31:8186/write
+  # The agent's ingest token, read from its state (made once Telemetry is on).
+  LAB_TELEMETRY_TOKEN_FILE: /agent/plugins/telemetry/ingest-token
+
+services:
+  agent:
+    image: ${LAB_AGENT_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-agent:latest}
+    # FLOORBIT_URL and FLOORBIT_AGENT_KEY, as for the agent's own compose.yml (agent.env.example).
+    env_file:
+      - path: agent.env
+        required: true
+    environment:
+      FLOORBIT_DATA_FILE: /app/state/agent-data.json
+    volumes: ["agent-state:/app/state"]
+    ports: ["127.0.0.1:9520:9520"]      # its status page and /metrics
+    networks: {lab: {ipv4_address: 172.31.10.31}}
+    restart: on-failure:3
+
+  core-01:          # Nexus core: also NetFlow and the gNMI/MDT stream
+    <<: *device
+    environment: {<<: [*env, *sending], DEVICE: core-01, LAB_FLOW_TARGETS: "172.31.10.31:2055"}
+    volumes: ["agent-state:/agent:ro"]
+    networks: {lab: {ipv4_address: 172.31.10.11}}
+  dist-01:          # Catalyst 4500
+    <<: *device
+    environment: {<<: *env, DEVICE: dist-01}
+    networks: {lab: {ipv4_address: 172.31.10.12}}
+  access-a1:        # Catalyst 2960-X, 24 seats each
+    <<: *device
+    environment: {<<: *env, DEVICE: access-a1}
+    networks: {lab: {ipv4_address: 172.31.10.20}}
+  access-b1:
+    <<: *device
+    environment: {<<: *env, DEVICE: access-b1}
+    networks: {lab: {ipv4_address: 172.31.10.21}}
+  access-c1:
+    <<: *device
+    environment: {<<: *env, DEVICE: access-c1}
+    networks: {lab: {ipv4_address: 172.31.10.22}}
+  access-d1:
+    <<: *device
+    environment: {<<: *env, DEVICE: access-d1}
+    networks: {lab: {ipv4_address: 172.31.10.23}}
+  fw-01:            # OPNsense: filterlog and its own Telegraf's push
+    <<: *device
+    environment: {<<: [*env, *sending], DEVICE: fw-01}
+    volumes: ["agent-state:/agent:ro"]
+    networks: {lab: {ipv4_address: 172.31.10.41}}
+  fw-02:
+    <<: *device
+    environment: {<<: [*env, *sending], DEVICE: fw-02}
+    volumes: ["agent-state:/agent:ro"]
+    networks: {lab: {ipv4_address: 172.31.10.42}}
+
+networks:
+  lab:
+    ipam:
+      config: [{subnet: 172.31.10.0/24}]
+
+volumes:
+  agent-state:
