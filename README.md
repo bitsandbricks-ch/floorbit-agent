@@ -128,6 +128,27 @@ machine's 127.0.0.1 only):
   why). `GET /status.json` gives the same as JSON. Read only, no scripts, no forms; plugin settings,
   logins and keys are never on it, and anything shaped like a token, password or community is masked.
 
+### The log
+
+`docker compose logs -f agent` shows one line per event, each with the time, the level and the part
+that speaks:
+
+```
+2026-11-19T10:51:14+0100 INFO  [agent] connected to https://floor.example.com as "Hall A" (Floorbit 1.0.0)
+2026-11-19T10:51:15+0100 INFO  [telemetry] Telegraf started (pid 41)
+2026-11-19T10:52:15+0100 INFO  [telemetry] polls, last minute: 6,720 points from 1 of 2 devices: sw-a-01 6720
+2026-11-19T10:52:15+0100 WARNING [telemetry] nothing in the last minute from 1: sw-a-02 (no answer)
+2026-11-19T10:56:14+0100 INFO  [agent] connected over WebSocket; up 5 min | telemetry warning (2 devices, 1 devices failing, 6,720 points, 69 sent)
+```
+
+It says when the agent connects, loses the link or falls back to the long poll; when a plugin starts,
+stops, fails or changes state (`[telemetry] now warning: ...`); when Telegraf starts, stops or reloads;
+each Test now and its result; and every minute what each device gave. Every five minutes
+(`FLOORBIT_AGENT_LOG_SUMMARY`, seconds, 0 for never) a summary line says how the agent and each plugin
+are doing. `FLOORBIT_AGENT_LOG_LEVEL=debug` adds every call from the hosted Floorbit with how long it
+took, every send with its count, every post from Telegraf and Telegraf's own lines; `warning` keeps
+only what went wrong. Keys and logins are never logged.
+
 `/metrics` is all counts and timings: no IPs, names, log lines or keys. The status page shows
 plugin messages, which can name a device and its address. To scrape it from another machine,
 publish the port on the LAN and set `FLOORBIT_AGENT_METRICS_TOKEN` (it guards `/metrics` only); Prometheus then sends it as a

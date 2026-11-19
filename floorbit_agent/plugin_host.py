@@ -27,6 +27,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import logs
+
 PULL_EVERY = 60
 # The hosted side's word in a split brain (docs/vrrp.md) counts this long after it was last heard;
 # with the uplink gone longer, VRRP alone decides again.
@@ -120,7 +122,15 @@ class AgentContext:
 
     # logging and health ---------------------------------------------------------------
     def log(self, message):
-        self.host.log(f'[{self.id}] {message}')
+        self.host.log(logs.at(getattr(message, 'level', None), f'[{self.id}] {message}'))
+
+    def warning(self, message):
+        self.log(logs.warning(message))
+
+    def debug(self, message):
+        """Only with FLOORBIT_AGENT_LOG_LEVEL=debug: the detail nobody needs while things work."""
+        if logs.enabled('debug'):
+            self.log(logs.debug(message))
 
     def health(self, status, message='', hint=''):
         try:
@@ -130,7 +140,7 @@ class AgentContext:
 
     def error(self, message):
         self.health_.error(message)
-        self.log(message)
+        self.log(logs.warning(message))
 
     def counter(self, name, n=1):
         self.health_.count(name, n)
@@ -191,6 +201,8 @@ class AgentContext:
             except Exception as exc:  # noqa: BLE001  # a sender that dies would leave the spool to fill up
                 self.error(f'sending failed: {type(exc).__name__}: {exc}; trying again')
                 sent = None
+            if sent:
+                self.debug(f'sent {sent} records to the hosted Floorbit, {self.backlog()} waiting')
             if sent is None:                # failed: wait before trying again
                 self.stopping.wait(SEND_RETRY)
             elif sent == 0:
@@ -439,7 +451,7 @@ def _actions_allowed(env):
 
 
 class PluginHost:
-    def __init__(self, agent, specs, state_root, env=None, log=print, local=None):
+    def __init__(self, agent, specs, state_root, env=None, log=logs.say, local=None):
         """``specs``: {plugin id: floorbit Spec} of the plugins in this image that have an agent part.
         ``local``: a LocalPlugins for the plugins without one (LibreNMS, NetBox, ...)."""
         self.agent = agent
@@ -776,7 +788,7 @@ class LocalPlugins:
     and with which settings; the settings stay in memory (they hold tokens). The agent's own
     environment no longer sets them (env_settings.py)."""
 
-    def __init__(self, app, registry, state_root, log=print):
+    def __init__(self, app, registry, state_root, log=logs.say):
         self.app, self.registry, self.log = app, registry, log
         self.path = os.path.join(state_root, 'local-plugins.json')
         try:

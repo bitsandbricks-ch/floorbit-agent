@@ -30,6 +30,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
+from . import logs
+
 DOOR_HEADER = 'Floorbit-Front-Door'
 CLIENT_HEADER = 'Floorbit-Client-IP'
 HOST_HEADER = 'Floorbit-Front-Door-Host'     # the name the attendee typed (checkin.lan lands on /checkin)
@@ -65,7 +67,7 @@ def _ip(text):
 
 
 class FrontDoor:
-    def __init__(self, url, key, http=None, proxies=(), log=print):
+    def __init__(self, url, key, http=None, proxies=(), log=logs.say):
         import requests
         self.url = url.rstrip('/')
         self.key = key
