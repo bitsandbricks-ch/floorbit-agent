@@ -1,6 +1,7 @@
 """What the crew relies on at the event, end to end: hosted Floorbit -> agent -> LibreNMS -> switches,
 and the event's syslog and flows -> agent -> hosted Floorbit."""
 import os
+import time
 
 import pytest
 import requests
@@ -254,6 +255,27 @@ def test_telegraf_mac_tables_feed_the_ip_and_mac_history(fb, lab):
     rows = eventually(found, timeout=240, what=f'{seat.label} in the IP and MAC history')
     assert {(r['device'], r['port']) for r in rows} == {(seat.switch, short(seat.port))}
     assert rows[0]['ip'] == seat.ip
+
+
+@pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
+def test_telegraf_takes_the_switches_traps(fb, lab):
+    """The switches' linkDown/linkUp traps get through the agent's Telegraf: its trap listener needs
+    net-snmp's snmptranslate, and an image without it drops every trap with "Error resolving OID"
+    (the telemetry plugin's health then names the traps listener)."""
+    def trap_trouble():
+        out = []
+        for a in fb.get('/api/agents')['agents']:
+            health = (((a.get('report') or {}).get('plugins') or {}).get('telemetry')) or {}
+            text = f"{health.get('message') or ''} {health.get('hint') or ''}"
+            if '(traps)' in text or 'snmptranslate' in text:
+                out.append(f"{a['name']}: {text.strip()}")
+        return out
+    # The senders send traps every round: watch over a few rounds, so a dropped one shows up.
+    deadline = time.monotonic() + 150
+    while time.monotonic() < deadline:
+        trouble = trap_trouble()
+        assert not trouble, f'traps are dropped: {trouble}'
+        time.sleep(5)
 
 
 def test_a_firewalls_own_telegraf_lands_on_the_firewall(fb, lab):

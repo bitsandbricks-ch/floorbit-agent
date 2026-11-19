@@ -37,8 +37,11 @@ COPY VERSION /app/floorbit_agent/VERSION
 # keepalived for the optional VRRP mode (vrrp.py). The file capabilities let it set the virtual IPs
 # while the agent runs as a normal user; the kernel only allows them when the container was given
 # NET_ADMIN (compose.vrrp.yml), so without VRRP mode they grant nothing.
+# snmp: Telegraf's trap listener looks up each trap's OIDs with net-snmp's snmptranslate; without
+# it every linkDown/linkUp is dropped with "snmptranslate not found". Floorbit reads the numeric
+# OIDs, so Debian's MIB-less package is enough.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends keepalived libcap2-bin \
+    && apt-get install -y --no-install-recommends keepalived libcap2-bin snmp \
     && setcap cap_net_admin,cap_net_raw+ep /usr/sbin/keepalived \
     && apt-get purge -y libcap2-bin && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
