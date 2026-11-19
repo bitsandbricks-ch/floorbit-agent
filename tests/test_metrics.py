@@ -137,3 +137,41 @@ def test_the_endpoint_with_a_token(served):
 @pytest.mark.parametrize('address', ['off', '', 'no-port-here'])
 def test_off_or_wrong_addresses_serve_nothing(address):
     assert metrics_mod.serve(metrics_mod.Metrics(), make(FakeHost()), address, 120, log=lambda *_: None) is None
+
+
+class _Plugins:
+    """What PluginHost.report() gives: one plugin warning about a device, with a secret in its text."""
+    def report(self):
+        return {'telemetry': {'status': 'warning', 'running': True, 'hint': 'device_problems',
+                              'message': '1 of 2 devices fail. sw-a-01 (snmp): <b>no answer</b> community=public',
+                              'metrics': {'points': 6720, 'sent': 69, 'devices_heard': 1}, 'auth_blocked': ['x'],
+                              'errors': [{'at': 1, 'error': 'token: fba_abc_secret refused'}]},
+                'syslog': {'status': 'error', 'running': False, 'message': 'cannot listen', 'metrics': {},
+                           'errors': []}}
+
+
+def test_the_status_page_is_open_read_only_and_gives_nothing_away(served):
+    a = make(FakeHost())
+    a.plugins = _Plugins()
+    base = served(a, token='scrape-me')
+    a.hello()
+    req = urllib.request.Request(base + '/')
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        page, headers = resp.read().decode(), resp.headers
+    # No token needed, unlike /metrics; and nothing it could run or be framed in.
+    assert "default-src 'none'" in headers['Content-Security-Policy'] and headers['X-Frame-Options'] == 'DENY'
+    assert '<script' not in page and '<form' not in page
+    assert 'Connected to Floorbit' in page and '6,720 points received' in page and '69 sends to Floorbit' in page
+    assert 'sw-a-01 (snmp)' in page and 'not running' in page
+    # Escaped, and secrets masked even inside a plugin's own message.
+    assert '<b>no answer</b>' not in page and '&lt;b&gt;no answer&lt;/b&gt;' in page
+    assert 'public' not in page and 'fba_abc_secret' not in page and 'fba_x_y' not in page
+    status, body = _get(base + '/status.json')
+    data = json.loads(body)
+    assert status == 200 and data['plugins']['telemetry']['metrics']['points'] == 6720
+    assert 'auth_blocked' not in data['plugins']['telemetry'] and 'fba_' not in body
+    # Read only: nothing but GET.
+    post = urllib.request.Request(base + '/', data=b'x', method='POST')
+    with pytest.raises(urllib.error.HTTPError) as err:
+        urllib.request.urlopen(post, timeout=5)
+    assert err.value.code == 501

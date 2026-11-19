@@ -96,9 +96,20 @@ machine's 127.0.0.1 only):
   numbers as `floorbit_agent_plugin_<name>{plugin="<id>"}` (syslog received, dropped and waiting,
   NetFlow packets and summaries, what waits in the buffer).
 
-It's all counts and timings: no IPs, names, log lines or keys. To scrape it from another machine,
+- `GET /` (never needs the token): a status page for a quick look in a browser, reloading every
+  10 s: connected or not, the agent's numbers, and each plugin's state, message and numbers (for
+  telemetry: points received, devices heard and failing, sends to Floorbit, which device fails and
+  why). `GET /status.json` gives the same as JSON. Read only, no scripts, no forms; plugin settings,
+  logins and keys are never on it, and anything shaped like a token, password or community is masked.
+
+`/metrics` is all counts and timings: no IPs, names, log lines or keys. The status page shows
+plugin messages, which can name a device and its address. To scrape it from another machine,
 publish the port on the LAN and set `FLOORBIT_AGENT_METRICS_TOKEN` (it guards `/metrics` only); Prometheus then sends it as a
 bearer token (`authorization: {credentials: ...}` in the scrape config).
+
+To open the status page from a laptop on the event network, publish the port there instead of on
+127.0.0.1 (`"9520:9520"` in `compose.yml`, or the agent's LAN address), and keep it off networks
+players use.
 
 Without Prometheus, the hosted Floorbit's Local agents page shows a summary of the same numbers:
 the agent sends it every half minute.

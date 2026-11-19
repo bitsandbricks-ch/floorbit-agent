@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- A status page on the agent itself: `http://<agent>:9520/` (and `/status.json`) shows at a glance whether it reaches Floorbit, its numbers, and each plugin's state, with telemetry's points, devices heard and failing and what fails. Read only and open like `/healthz`; no scripts or forms, and nothing secret on it.
 - Telegraf is in the image (1.40.3), and Floorbit's Telemetry plugin runs it inside the agent: device telemetry needs no `telegraf` container and no `--profile telemetry`. `compose.yml` publishes 162/udp (traps) and 57000 (MDT) by default. `FLOORBIT_TELEGRAF=sidecar` keeps the old container. The test lab runs it the same way, without its telegraf service. Floorbit then shows why a device sends nothing, per device, and has Test now and Raw data (Floorbit's docs/agent.md, "Telegraf").
 - Plugin health can carry a hint code, which the hosted page turns into a translated sentence with a link.
 - Telemetry in the test lab: Floorbit's Telemetry plugin set up for every lab device, a real Telegraf polling the simulated switches through agent A, the core's gNMI and Cisco MDT streams and the firewalls' own push replayed, and end-to-end tests from a seat port's traffic to the IP and MAC history.
