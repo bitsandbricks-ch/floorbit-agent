@@ -69,6 +69,8 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- The test lab's Catalysts answer a per-VLAN SNMP walk for every VLAN they list (VLAN 1 on all of them, VLAN 100 on dist-01), with an empty MAC table, as real Cisco IOS does. Before, those walks timed out in the lab.
+
 - SNMP traps get through: Telegraf dropped every linkDown/linkUp with "Error resolving OID", because it named OIDs with net-snmp's `snmptranslate`, which the image doesn't have. `FLOORBIT_REF` moves to the Floorbit whose Telegraf config uses Telegraf's own MIB reader (gosmi) instead. The lab now checks that traps get through.
 - A plugin's HTTP listener takes chunked bodies. Telegraf's HTTP output sends that way, so until now the telemetry collector dropped everything Telegraf sent. `FLOORBIT_REF` moves to the Floorbit that finds a firewall by its short name when its own Telegraf sends the full host name.
 - The seat speed test through the front door works with Floorbit from 2026-11-18 on, which counts each seat's tests on top of each client's (`FLOORBIT_REF` moves to that Floorbit).
