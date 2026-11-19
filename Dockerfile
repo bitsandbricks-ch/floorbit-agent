@@ -27,6 +27,10 @@ RUN grep -v '^gunicorn' /tmp/requirements.txt > /tmp/req.txt \
 RUN pip install --no-cache-dir "requests>=2.31" "simple-websocket>=1.0"
 COPY --from=floorbit /out/ /app/
 RUN rm /app/requirements.txt
+# Telegraf for device telemetry: the Telemetry plugin runs it inside the agent and reads what it
+# says about each device (Floorbit's docs/agent.md, "Telegraf"), so there's no sidecar to forget.
+# Its static binary only; the version is the one Floorbit's config is tested with.
+COPY --from=telegraf:1.40.3 /usr/bin/telegraf /usr/local/bin/telegraf
 COPY floorbit_agent/ /app/floorbit_agent/
 COPY VERSION /app/floorbit_agent/VERSION
 
@@ -43,8 +47,8 @@ RUN useradd --system --uid 10001 --create-home --home-dir /home/floorbit --shell
 VOLUME /app/state
 USER floorbit
 ENV FLOORBIT_DATA_FILE=/app/state/agent-data.json PYTHONUNBUFFERED=1
-# The agent serves no pages: nothing to expose but the optional syslog and flow ports.
-EXPOSE 5514/udp 2055/udp 8186/tcp 9520/tcp
+# The agent serves no pages: only what its plugins listen on (docs/agent.md, "Ports" in Floorbit).
+EXPOSE 5514/udp 2055/udp 1162/udp 57000/tcp 8186/tcp 9520/tcp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=2 \
     CMD ["python", "-m", "floorbit_agent", "health"]
 CMD ["python", "-m", "floorbit_agent"]

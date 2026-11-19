@@ -35,7 +35,21 @@ curl -fsSLo agent.env https://raw.githubusercontent.com/bitsandbricks-ch/floorbi
 # fill in FLOORBIT_URL and FLOORBIT_AGENT_KEY in agent.env; the rest is set up in Floorbit
 docker compose run --rm agent python -m floorbit_agent check
 docker compose up -d
+curl -s http://127.0.0.1:9520/healthz     # {"ok": true, ...} once it reached the hosted Floorbit
 ```
+
+That's one container. Telegraf, which collects device telemetry (SNMP, traps, gNMI, Cisco MDT),
+is in the image and runs inside the agent when the **Telemetry** plugin is on: there's no
+second container to start. `compose.yml` publishes what is needed by default (9520 on this machine
+only, 162/udp for traps and 57000 for MDT); the ports of the plugins that listen in the hall
+(syslog 514/udp, NetFlow 2055/udp, a firewall's own Telegraf on 8186, the check-in note on 8908, the
+front door on 8443) are commented out until you use them. Every port, and how to check that each
+one works: Floorbit's [docs/agent.md, "Ports"](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md#ports).
+
+**Updating from a compose file with a `telegraf` service:** delete that service, take the new
+`compose.yml` (or add the two telemetry ports to yours), and run `docker compose pull && docker
+compose up -d --remove-orphans`. A telegraf container that keeps running is refused by the agent
+and named on its page in Floorbit.
 
 ## Use
 

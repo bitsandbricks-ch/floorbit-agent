@@ -18,7 +18,6 @@ generated from it:
 | `lancache-01` | The LAN cache box, also the DNS server | its access log and the DNS query log |
 | `librenms` | LibreNMS | [`lab/librenms_lite`](../../lab/librenms_lite/server.py): polls the simulated devices over SNMP and answers the API calls Floorbit makes |
 | `agent-a`, `agent-b` | Two agents at the event | this repository's image |
-| `telegraf` | Agent A's Telegraf sidecar | `telegraf:1.40.3` with the config agent A writes: SNMP polling (MAC tables per VLAN on the Catalysts) and traps |
 | `floorbit` | The hosted Floorbit | Floorbit's image, or built from a Floorbit checkout |
 
 96 seats in four blocks of 24, on VLANs 101 to 104. A few are faulty on purpose: B-3 runs half
@@ -119,12 +118,12 @@ The LAN cache numbers are skipped until Floorbit has them (bitsandbricks-ch/floo
 Setup turns on Floorbit's Telemetry plugin with every lab device as a target, as the crew would
 under Settings > Telemetry: SNMP v2c for all, MAC tables per seat VLAN on the Catalysts, Cisco
 model-driven telemetry by node name on the core, the firewalls' own push. Only agent A collects
-(without VRRP both agents would count as the collector), and the `telegraf` service runs the config
-agent A writes. The core's replay also streams gNMI and Cisco MDT counters for its ports, and the
+(without VRRP both agents would count as the collector), and the Telegraf inside agent A's image
+runs the config it writes, as at an event; the devices send their traps to agent A. The core's replay also streams gNMI and Cisco MDT counters for its ports, and the
 firewalls push CPU, memory and pf states, both to agent A's port 8186 with its ingest token.
 
-`lab/run-local.sh` starts Telegraf when there is one on the PATH (or `TELEGRAF=/path/to/telegraf`);
-without it the tests that need it skip. Traps stay off locally: every device is 127.0.0.1 there, so
+`lab/run-local.sh` hands the agents the Telegraf on the PATH (or `TELEGRAF=/path/to/telegraf`) to run
+themselves; without it the tests that need it skip. Traps stay off locally: every device is 127.0.0.1 there, so
 the agent couldn't tell them apart.
 
 ## Real samples

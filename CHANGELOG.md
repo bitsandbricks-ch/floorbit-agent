@@ -8,6 +8,8 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Telegraf is in the image (1.40.3), and Floorbit's Telemetry plugin runs it inside the agent: device telemetry needs no `telegraf` container and no `--profile telemetry`. `compose.yml` publishes 162/udp (traps) and 57000 (MDT) by default. `FLOORBIT_TELEGRAF=sidecar` keeps the old container. The test lab runs it the same way, without its telegraf service. Floorbit then shows why a device sends nothing, per device, and has Test now and Raw data (Floorbit's docs/agent.md, "Telegraf").
+- Plugin health can carry a hint code, which the hosted page turns into a translated sentence with a link.
 - Telemetry in the test lab: Floorbit's Telemetry plugin set up for every lab device, a real Telegraf polling the simulated switches through agent A, the core's gNMI and Cisco MDT streams and the firewalls' own push replayed, and end-to-end tests from a seat port's traffic to the IP and MAC history.
 - The test lab runs from pulled images: its own image is published as `ghcr.io/bitsandbricks-ch/floorbit-lab` (amd64 and arm64, `latest` and the short commit) on every merge that touches `lab/`, and `lab/compose.yml` takes Floorbit, the agent and the lab from GHCR unless it is run with `--build`. A single simulated device runs with `docker run -e DEVICE=access-a1 ghcr.io/bitsandbricks-ch/floorbit-lab sh /lab/device.sh`.
 - `plugin_test`: the hosted Settings > Plugins > Test button for a plugin that reaches the event network runs here, where the plugin runs.

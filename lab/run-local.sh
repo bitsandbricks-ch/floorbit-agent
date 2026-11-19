@@ -49,6 +49,10 @@ start() {
     --front-door 127.0.0.1:8443 --captive-proxies 127.0.0.1 --listeners-on agent-a --telemetry-on agent-a --snmp-devices "${spec#,}" \
     agent-a agent-b
 
+  # Telegraf runs inside each agent, as in the image: the one on the PATH (or TELEGRAF=...).
+  # Traps stay off here: every device is 127.0.0.1, so a trap couldn't say which one it is.
+  telegraf=$(command -v "${TELEGRAF:-telegraf}" || true)
+  [ -n "$telegraf" ] || echo "No telegraf here (set TELEGRAF): the telemetry tests will skip what it polls."
   i=0
   for a in agent-a agent-b; do
     mkdir -p "$STATE/$a"
@@ -56,20 +60,11 @@ start() {
       FLOORBIT_AGENT_INSECURE=1 FLOORBIT_AGENT_KEY="$(cat "$STATE/keys/$a.key")" \
       FLOORBIT_DATA_FILE="$STATE/$a/agent-data.json" FLOWS_DIR="$STATE/$a/flows" \
       FLOORBIT_AGENT_METRICS=127.0.0.1:$((9520 + i)) FLOORBIT_AGENT_LAN_URL=http://127.0.0.1:8908 \
-      FLOORBIT_TELEMETRY_PORT=$((8186 + i)) FLOORBIT_TELEGRAF_OUTPUT=http://127.0.0.1:$((8186 + i))/write \
+      FLOORBIT_TELEMETRY_PORT=$((8186 + i)) FLOORBIT_TELEGRAF_BIN="$telegraf" \
       $PY -m floorbit_agent) > "$STATE/$a.log" 2>&1 &
     echo $! > "$STATE/$a.pid"
     i=$((i + 1))
   done
-  # Telegraf, if there is one, polls the simulated devices for agent A's telemetry collector.
-  # Traps stay off here: every device is 127.0.0.1, so a trap couldn't say which one it is.
-  conf="$STATE/agent-a/plugins/telemetry/telegraf.conf"
-  if command -v "${TELEGRAF:-telegraf}" > /dev/null; then
-    (until [ -f "$conf" ]; do sleep 2; done; exec "${TELEGRAF:-telegraf}" --config "$conf" --watch-config notify) \
-      > "$STATE/telegraf.log" 2>&1 &
-  else
-    echo "No telegraf here (set TELEGRAF): the telemetry tests will skip what it polls."
-  fi
   # Everything comes from 127.0.0.1 here, so one replay sends for all devices.
   LAB_SYSLOG_TARGETS=127.0.0.1:5524 LAB_FLOW_TARGETS=127.0.0.1:2065 LAB_LANCACHE_DIR="$STATE/lancache" \
     LAB_PUSH_URL=http://127.0.0.1:8186/write LAB_STREAM_URL=http://127.0.0.1:8186/write \
@@ -87,7 +82,7 @@ e2e() {
 
 stop() {
   pkill -f "$LAB/replay/replay.py" || true
-  pkill -f "telegraf --config $STATE/" || true
+  pkill -f "telegraf --config $STATE/" || true   # the agents' own, should one outlive them
   pkill -f "floorbit_agent" || true
   pkill -f "$LAB/librenms_lite/server.py" || true
   pkill -f "snmpsim-command-responder --data-dir=$LAB" || true

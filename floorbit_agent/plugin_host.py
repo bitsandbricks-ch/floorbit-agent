@@ -121,8 +121,11 @@ class AgentContext:
     def log(self, message):
         self.host.log(f'[{self.id}] {message}')
 
-    def health(self, status, message=''):
-        self.health_.set(status, message)
+    def health(self, status, message='', hint=''):
+        try:
+            self.health_.set(status, message, hint)
+        except TypeError:      # a Floorbit from before health hints (FLOORBIT_REF)
+            self.health_.set(status, message)
 
     def error(self, message):
         self.health_.error(message)

@@ -19,8 +19,8 @@ x-device: &device
   command: ["sh", "/lab/device.sh"]
   environment: &device-env
     LAB_SYSLOG_TARGETS: 172.31.10.31:5514,172.31.10.32:5514
-    # linkDown/linkUp to the agent's Telegraf, which knows each device by its address.
-    LAB_TRAP_TARGETS: ${LAB_TRAP_TARGETS:-172.31.10.33:1162}
+    # linkDown/linkUp to the Telegraf inside agent A, which knows each device by its address.
+    LAB_TRAP_TARGETS: ${LAB_TRAP_TARGETS:-172.31.10.31:1162}
     LAB_REPLAY_EVERY: "10"
   restart: unless-stopped
 
@@ -161,8 +161,8 @@ services:
 
   agent-a:
     <<: *agent
-    environment: {<<: *agent-env, LAB_AGENT: agent-a, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.31:8908",
-                  FLOORBIT_TELEGRAF_OUTPUT: "http://172.31.10.31:8186/write"}
+    # Telegraf runs inside the agent (the image carries it): no sidecar.
+    environment: {<<: *agent-env, LAB_AGENT: agent-a, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.31:8908"}
     volumes:
       - keys:/keys:ro
       - lancache:/lancache:ro
@@ -172,17 +172,6 @@ services:
     <<: *agent
     environment: {<<: *agent-env, LAB_AGENT: agent-b, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.32:8908"}
     networks: {lab: {ipv4_address: 172.31.10.32}}
-
-  # Agent A's Telegraf, as in the agent's own compose.yml: polls the simulated devices over SNMP
-  # (MAC tables per VLAN on the Catalysts), takes their traps, sends to agent A.
-  telegraf:
-    image: telegraf:1.40.3
-    user: "10001"
-    entrypoint: ["sh", "-c", "until [ -f /app/state/plugins/telemetry/telegraf.conf ]; do sleep 2; done; exec telegraf --config /app/state/plugins/telemetry/telegraf.conf --watch-config notify"]
-    volumes: ["agent-a-state:/app/state:ro"]
-    networks: {lab: {ipv4_address: 172.31.10.33}}
-    depends_on: [agent-a]
-    restart: unless-stopped
 
   e2e:
     image: ${LAB_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-lab:latest}
