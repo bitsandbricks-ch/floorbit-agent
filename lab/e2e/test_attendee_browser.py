@@ -105,7 +105,8 @@ def test_the_crew_walks_a_seat_from_the_walk_page(fb, lab, browser):
     page.locator('input[type=password]').fill(os.environ.get('LAB_ADMIN_PASSWORD', 'lab-admin-password'))
     page.keyboard.press('Enter')
     page.wait_for_url(f'{DOOR}/seat-walk', timeout=30_000)
-    page.wait_for_load_state('networkidle')
+    # Not networkidle: the page keeps a live-updates stream open.
+    page.get_by_label('Seat block').first.wait_for(timeout=30_000)
     assert not page.get_by_text("doesn't know where laptops").count()
     assert not page.get_by_text('No laptop in the hall has reached a local agent yet').count()
     page.get_by_label('Seat block').first.click()
