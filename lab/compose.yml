@@ -73,7 +73,8 @@ services:
       CHECKIN_TRUST_PROXY: "true"
       # What attendees type: agent A's front door (at an event, a name like checkin.lan pointing at
       # the agent). Its "/" is then the check-in page instead of the crew's sign-in.
-      CHECKIN_ADDRESS: "172.31.10.31"
+      # Port 8080: the front door inside the container; an event publishes it as 80.
+      CHECKIN_ADDRESS: "172.31.10.31:8080"
       # The agents' "sign in to network" note (Captive Portal API).
       # A device down or back shows after two polls in a row: every 15 s here (60 s by default), so
       # the drills don't wait minutes.
