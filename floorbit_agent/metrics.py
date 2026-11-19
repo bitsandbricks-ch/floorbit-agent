@@ -2,11 +2,13 @@
 
 ``GET /metrics`` answers in the Prometheus text format; ``GET /healthz`` answers 200 while the hosted
 Floorbit answered in the last HEALTHY_FOR seconds and 503 otherwise, with the reason as JSON.
+``GET /`` is a status page for a quick look in a browser, ``/status.json`` the same as JSON
+(status_page.py).
 
 Listens on ``FLOORBIT_AGENT_METRICS`` (default ``0.0.0.0:9520`` inside the container; the compose
 file publishes it on the host's 127.0.0.1 only). ``off`` turns it off. With
 ``FLOORBIT_AGENT_METRICS_TOKEN`` set, ``/metrics`` needs ``Authorization: Bearer <token>``;
-``/healthz`` never does, so local checks need nothing.
+``/healthz`` and the status page never do, so local checks need nothing.
 
 Only counts and timings: no IPs, names, log lines or keys, so it is safe to scrape from anywhere the
 crew trusts.
@@ -203,12 +205,14 @@ def serve(metrics, agent, address, healthy_for, token=None, log=print):
     class Handler(BaseHTTPRequestHandler):
         timeout = http_limits.IDLE_SECONDS
 
-        def _send(self, status, body, kind):
+        def _send(self, status, body, kind, headers=None):
             data = body.encode()
             self.send_response(status)
             self.send_header('Content-Type', kind)
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Cache-Control', 'no-store')
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(data)
 
@@ -219,6 +223,15 @@ def serve(metrics, agent, address, healthy_for, token=None, log=print):
                 # says only up or not, the link and how long ago.
                 ok, details = health_of(agent, healthy_for)
                 self._send(200 if ok else 503, json.dumps(details) + '\n', 'application/json')
+                return
+            if path in ('/', '/status.json'):
+                # Open like /healthz (read only, built to give nothing away): status_page.py.
+                from . import status_page
+                data = status_page.status(agent, health_of(agent, healthy_for)[1])
+                if path == '/':
+                    self._send(200, status_page.render(data), 'text/html; charset=utf-8', status_page.SECURITY_HEADERS)
+                else:
+                    self._send(200, status_page.as_json(data), 'application/json', status_page.SECURITY_HEADERS)
                 return
             if token:
                 given = self.headers.get('Authorization', '')

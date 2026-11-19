@@ -24,7 +24,7 @@ services:
     volumes:
       - agent_state:/app/state
     ports:
-      # /metrics and /healthz for Prometheus, on this machine only (README.md, "Monitor it").
+      # The status page (/), /healthz and /metrics, on this machine only (README.md, "Monitor it").
       - "127.0.0.1:9520:9520"
       # Device telemetry: the agent runs Telegraf itself. SNMP traps and Cisco model-driven
       # telemetry (dial-out) from the devices. Another trap receiver on this machine already holds
