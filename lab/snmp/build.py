@@ -57,10 +57,12 @@ class Walk:
         self.rows[oid] = (kind, value)
 
     def counter(self, oid, kind, per_second, initial=0):
+        # A Nexus ifIndex is large (83886080), so index-based starting values pass 2^32: wrap them
+        # for a port that is down too, or snmpsim refuses the row and the walk breaks off there.
+        wrap = 2 ** 32 if kind == C32 else 2 ** 64
         if per_second <= 0:
-            self.add(oid, kind, str(int(initial)))
+            self.add(oid, kind, str(int(initial) % wrap))
         else:
-            wrap = 2 ** 32 if kind == C32 else 2 ** 64
             self.add(oid, kind + NUMERIC, f'initial={int(initial) % wrap},rate={per_second:g},wrap=1')
 
     def text(self):
