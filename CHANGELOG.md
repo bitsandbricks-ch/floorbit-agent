@@ -6,6 +6,10 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `compose.yml` publishes the check-in note (8908) and the attendees' front door (443 to 8443) by default, since Floorbit now turns both plugins on for every agent. `CAPTIVE_PUBLISH_PORT` and `FRONT_DOOR_PUBLISH_PORT` move them when something else holds the port.
+
 ### Added
 
 - Drills in the test lab (`lab/e2e/test_drills.py`): a firewall and an access switch die and come back, LibreNMS goes away, the hosted Floorbit goes away and comes back; CI runs each. The lab plans a seat range per block on its firewalls.
