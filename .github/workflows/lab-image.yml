@@ -1,0 +1,80 @@
+# Builds the test lab's image (lab/Dockerfile: the simulated devices, the lab LibreNMS and the
+# end-to-end tests) for amd64 and arm64, so the lab runs from pulled images (docs/lab/README.md).
+# Pull requests that touch lab/ only build it; main also pushes ghcr.io/<owner>/floorbit-lab
+# (tags: latest and the short sha).
+name: Lab image
+
+on:
+  push:
+    branches: [main]
+    paths: ["lab/**", ".github/workflows/lab-image.yml"]
+  pull_request:
+    paths: ["lab/**", ".github/workflows/lab-image.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lab-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # arm64 is built under emulation, for Macs with Apple chips and Raspberry Pis. A
+      # docker-container builder, because the default one can't hold a two-platform image.
+      - name: Set up QEMU and Buildx
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends qemu-user-static
+          docker buildx create --name lab --driver docker-container --use
+          docker buildx inspect --bootstrap
+      - if: github.event_name != 'pull_request'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build, and push unless it's a pull request
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          image="ghcr.io/${OWNER,,}/floorbit-lab"
+          source="org.opencontainers.image.source=https://github.com/$REPO"
+          description="org.opencontainers.image.description=Floorbit test lab: simulated switches and firewalls, a lab LibreNMS, the end-to-end tests"
+          platforms=linux/amd64,linux/arm64
+          args=(--platform "$platforms" --provenance=false -t "$image:${GITHUB_SHA::12}"
+            --label "$source" --label "$description"
+            --annotation "index:$source" --annotation "index:$description")
+          if [ "$GITHUB_REF" = refs/heads/main ]; then args+=(-t "$image:latest"); fi
+          if [ "$EVENT" != pull_request ]; then args+=(--push); fi
+          docker buildx build "${args[@]}" lab
+
+  pulled:
+    # What the docs promise: the lab from this repository and GHCR alone, with no Floorbit
+    # checkout and no build. The lab image just pushed; Floorbit and the agent at their latest.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Use the image just pushed
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "LAB_IMAGE=ghcr.io/${OWNER,,}/floorbit-lab:${GITHUB_SHA::12}" >> "$GITHUB_ENV"
+          echo "LAB_FLOORBIT_SRC=/nonexistent" >> "$GITHUB_ENV"
+      - run: docker compose -f lab/compose.yml pull
+      - run: docker compose -f lab/compose.yml up -d --no-build --wait --wait-timeout 600
+      - run: docker compose -f lab/compose.yml run --rm e2e
+      - name: Lab logs
+        if: failure()
+        run: docker compose -f lab/compose.yml logs --no-color --tail 300

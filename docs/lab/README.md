@@ -18,7 +18,7 @@ generated from it:
 | `lancache-01` | The LAN cache box, also the DNS server | its access log and the DNS query log |
 | `librenms` | LibreNMS | [`lab/librenms_lite`](../../lab/librenms_lite/server.py): polls the simulated devices over SNMP and answers the API calls Floorbit makes |
 | `agent-a`, `agent-b` | Two agents at the event | this repository's image |
-| `floorbit` | The hosted Floorbit | built from a Floorbit checkout |
+| `floorbit` | The hosted Floorbit | Floorbit's image, or built from a Floorbit checkout |
 
 96 seats in four blocks of 24, on VLANs 101 to 104. A few are faulty on purpose: B-3 runs half
 duplex, C-9 counts CRC errors, D-12 is shut, and a handful are offline. The devices send syslog
@@ -30,13 +30,40 @@ the unit tests fail when someone changes `topology.py` and forgets to run it.
 
 ## Run it
 
-With Docker, from this repository with a Floorbit checkout next to it:
+With Docker, from this repository. Every image comes ready-made from GHCR, so nothing is built and
+no Floorbit checkout is needed:
 
 ```sh
-docker compose -f lab/compose.yml up -d --build --wait
+docker compose -f lab/compose.yml up -d --wait
 docker compose -f lab/compose.yml run --rm e2e        # the end-to-end tests
 # http://localhost:8080, admin / lab-admin-password
 docker compose -f lab/compose.yml down -v
+```
+
+| Image | Built by | Tags | Platforms |
+| --- | --- | --- | --- |
+| `ghcr.io/bitsandbricks-ch/floorbit-lab` | this repository, `lab/Dockerfile` (the `Lab image` workflow) | `latest`, the short commit | amd64, arm64 |
+| `ghcr.io/bitsandbricks-ch/floorbit-agent` | this repository, `Dockerfile` (the `Image` workflow) | `latest`, the short commit, the version | amd64 |
+| `ghcr.io/bitsandbricks-ch/floorbit` | bitsandbricks-ch/floorbit | `latest`, the short commit, the version | amd64 |
+
+On a Mac with an Apple chip Docker Desktop runs the amd64 images emulated, a little slower.
+
+`latest` is the newest from each repository's main branch; `docker compose -f lab/compose.yml pull`
+fetches it again. `LAB_IMAGE`, `LAB_AGENT_IMAGE` and `LAB_FLOORBIT_IMAGE` pick another tag.
+
+When you change `lab/` or the agent, build instead, with a Floorbit checkout next to this
+repository (or `LAB_FLOORBIT_SRC` pointing at one), as CI does:
+
+```sh
+docker compose -f lab/compose.yml up -d --build --wait
+```
+
+One simulated device on its own, say to point a Telegraf or a LibreNMS of your own at it
+(SNMP v2c, community `public`; `DEVICE` is any device in `lab/topology.py`):
+
+```sh
+docker run --rm -p 1161:161/udp -e DEVICE=access-a1 ghcr.io/bitsandbricks-ch/floorbit-lab sh /lab/device.sh
+snmpwalk -v2c -c public 127.0.0.1:1161 1.3.6.1.2.1.31.1.1.1.1    # ifName
 ```
 
 Failover: `docker compose -f lab/compose.yml stop agent-a`, then
@@ -61,7 +88,9 @@ an event: the lab LibreNMS, syslog and NetFlow from the hall, the check-in note 
 front door (check-in takes the seat PC's address only from there). The agents get
 only their URL and key.
 
-CI runs the Docker lab on every pull request (the `lab` job), normal run and failover.
+CI runs the Docker lab on every pull request (the `lab` job), normal run and failover, built from
+the branch. After a merge to main, the `Lab image` workflow pushes the lab image and runs the lab once
+more from the pulled images only.
 
 ## What the tests check
 
