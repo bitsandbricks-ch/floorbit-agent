@@ -4,6 +4,11 @@ against fakes: a real Floorbit, real agents, the lab LibreNMS and the simulated 
 Settings (env): LAB_FLOORBIT_URL, LAB_ADMIN_PASSWORD, LAB_AGENT_METRICS ("name=url,..."),
 LAB_CAPTIVE (an agent's captive portal URL), LAB_FRONT_DOOR (an agent's front door),
 LAB_AGENT_DOWN (the agent the failover run stopped).
+
+LAB_DRILL names the bad day the lab is in, and only that drill's tests run (test_drills.py, and
+the failover's here): devices-down (LAB_DOWN, fw-01 and access-c1 stopped), recovered (started
+again), librenms-down, hosted-down (Floorbit stopped) and hosted-back (LAB_HOSTED_AWAY, "from-to"
+in epoch seconds). Without it, the normal run.
 """
 import os
 import pathlib
@@ -19,15 +24,23 @@ from topology import LAB
 URL = os.environ.get('LAB_FLOORBIT_URL', 'http://127.0.0.1:5000').rstrip('/')
 
 
+def drill():
+    """The bad day the lab is in ('' on a normal day)."""
+    return os.environ.get('LAB_DRILL') or ('agent-down' if os.environ.get('LAB_AGENT_DOWN') else '')
+
+
 def pytest_configure(config):
     config.addinivalue_line('markers', 'failover: run after one agent was stopped (LAB_AGENT_DOWN)')
+    config.addinivalue_line('markers', 'drill(name): run only in that drill (LAB_DRILL)')
 
 
 def pytest_collection_modifyitems(config, items):
-    down = os.environ.get('LAB_AGENT_DOWN')
+    now = drill()
     for item in items:
-        if ('failover' in item.keywords) != bool(down):
-            item.add_marker(pytest.mark.skip(reason='failover run only' if not down else 'normal run only'))
+        mark = item.get_closest_marker('drill')
+        wants = mark.args[0] if mark else 'agent-down' if 'failover' in item.keywords else ''
+        if wants != now:
+            item.add_marker(pytest.mark.skip(reason=f'{wants or "normal"} run only'))
 
 
 def eventually(check, timeout=90, every=3, what='the lab'):
@@ -79,12 +92,13 @@ def fb():
     f.login()
     # Both agents connected (or, in the failover run, the one still up) and the lab LibreNMS
     # polled twice, so port rates are there.
-    want = 1 if os.environ.get('LAB_AGENT_DOWN') else 2
+    want = 1 if drill() == 'agent-down' else 2
 
     def agents_up():
         return sum(a['connected'] for a in f.get('/api/agents')['agents']) >= want
-    eventually(agents_up, what='the agents')
-    eventually(lambda: f.get('/api/switches/access-b1/status').get('status') == 'online', what='the lab LibreNMS')
+    eventually(agents_up, timeout=180, what='the agents')
+    if drill() != 'librenms-down':
+        eventually(lambda: f.get('/api/switches/access-b1/status').get('status') == 'online', what='the lab LibreNMS')
     return f
 
 

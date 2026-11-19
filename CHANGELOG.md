@@ -8,6 +8,9 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Drills in the test lab (`lab/e2e/test_drills.py`): a firewall and an access switch die and come back, LibreNMS goes away, the hosted Floorbit goes away and comes back; CI runs each. The lab plans a seat range per block on its firewalls.
+- The test lab's switches answer SSH as Cisco IOS and NX-OS (`lab/switch_ssh`), and the lab stores a switch login in Floorbit: the end-to-end tests run the switch command templates, a config backup, port shut, turn on and bounce, Clear port counters and the browser terminal through the agents. A shut port changes the switch's SNMP, syslog, traps and running config, as at the event.
+- `lab/senders.yml`: an agent of yours with the lab's simulated hall around it, sending syslog, traps, NetFlow, the gNMI/MDT stream and the firewalls' push, for a Floorbit you test with.
 - Built on Floorbit #917 (discovery): the telemetry plugin also asks each SNMP device what it is every five minutes (sysDescr, sysLocation, the chassis model and serial, memory, disks, CPUs, and the memory use of Cisco switches), so Floorbit fills its inventory devices from it.
 - Built on Floorbit #861: the telemetry plugin's log lines (Telegraf started, stopped and reloaded, each Test now and its result, every minute the points per device and the devices that gave nothing).
 - Settings from Floorbit: the agent's page in Floorbit sets where laptops reach it, its metrics port and token, its disk buffer, the Telegraf port, the log level (`FLOORBIT_AGENT_LOG_LEVEL`, applied at once) and summary interval (`FLOORBIT_AGENT_LOG_SUMMARY`), and VRRP. The agent keeps them in its state folder and starts with them; its own environment variables still win, and the report says where each value comes from and which wait for a restart. What the hall allows (actions, plugin updates, the networks it may reach) stays in its environment only.
@@ -66,6 +69,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- SNMP traps get through: Telegraf dropped every linkDown/linkUp with "Error resolving OID", because it named OIDs with net-snmp's `snmptranslate`, which the image doesn't have. `FLOORBIT_REF` moves to the Floorbit whose Telegraf config uses Telegraf's own MIB reader (gosmi) instead. The lab now checks that traps get through.
 - A plugin's HTTP listener takes chunked bodies. Telegraf's HTTP output sends that way, so until now the telemetry collector dropped everything Telegraf sent. `FLOORBIT_REF` moves to the Floorbit that finds a firewall by its short name when its own Telegraf sends the full host name.
 - The seat speed test through the front door works with Floorbit from 2026-11-18 on, which counts each seat's tests on top of each client's (`FLOORBIT_REF` moves to that Floorbit).
 - Stopping the agent while it was sending syslog could fail with "pop from an empty deque" and keep the waiting lines on disk twice.

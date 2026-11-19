@@ -91,7 +91,7 @@ jobs:
     # The hardware-free test lab (docs/lab/README.md): Floorbit, two agents, the lab LibreNMS and the
     # simulated switches, end to end; then agent A goes away and agent B has to carry on.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: ref
@@ -109,6 +109,32 @@ jobs:
         env:
           LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
         run: docker compose -f lab/compose.yml run --rm e2e
+      # Bad days (docs/lab/README.md, "Drills"): each part goes away, the crew's view is checked,
+      # and it comes back.
+      - name: "Drill: a firewall and an access switch die, then come back"
+        env:
+          LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
+        run: |
+          docker compose -f lab/compose.yml stop fw-01 access-c1
+          docker compose -f lab/compose.yml run --rm -e LAB_DRILL=devices-down e2e
+          docker compose -f lab/compose.yml start fw-01 access-c1
+          docker compose -f lab/compose.yml run --rm -e LAB_DRILL=recovered e2e
+      - name: "Drill: LibreNMS is away"
+        env:
+          LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
+        run: |
+          docker compose -f lab/compose.yml stop librenms
+          docker compose -f lab/compose.yml run --rm -e LAB_DRILL=librenms-down e2e
+          docker compose -f lab/compose.yml start librenms
+      - name: "Drill: the hosted Floorbit is away, then back"
+        env:
+          LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
+        run: |
+          from=$(date +%s)
+          docker compose -f lab/compose.yml stop floorbit
+          docker compose -f lab/compose.yml run --rm -e LAB_DRILL=hosted-down e2e
+          docker compose -f lab/compose.yml up -d --wait floorbit
+          docker compose -f lab/compose.yml run --rm -e LAB_DRILL=hosted-back -e "LAB_HOSTED_AWAY=$from-$(date +%s)" e2e
       - name: Failover (agent A stopped)
         env:
           LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src

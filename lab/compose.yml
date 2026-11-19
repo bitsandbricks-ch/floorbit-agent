@@ -73,6 +73,9 @@ services:
       CHECKIN_TRUST_PROXY: "true"
       # The agents' "sign in to network" note (Captive Portal API).
       CAPTIVE_ENABLED: "true"
+      # A device down or back shows after two polls in a row: every 15 s here (60 s by default), so
+      # the drills don't wait minutes.
+      STATUS_MONITOR_INTERVAL: "15"
     volumes:
       - ./fixtures/seats.json:/lab/seats.json:ro
     networks: {lab: {ipv4_address: 172.31.10.2}}

@@ -38,3 +38,4 @@ coverage/
 # Agents' local state
 .claude/settings.local.json
 floorbit.db
+lab/agent.env

@@ -249,3 +249,81 @@ def test_netflow_header_counts_its_records():
     assert (version, secs, seq) == (9, 1_800_000_000, 7)
     assert count >= 2
     assert socket.inet_aton(LAB.seats[0].ip) in pkt or count > 1
+
+
+# --- the switches' SSH (lab/switch_ssh) ------------------------------------------------------------
+
+switch_ssh = _load('lab_switch_ssh', 'switch_ssh/server.py')
+
+
+class FakeChannel:
+    """What a Session reads and writes: typed input in, the switch's screen out."""
+
+    def __init__(self, typed):
+        self.typed, self.screen = typed.encode(), b''
+
+    def recv(self, n):
+        out, self.typed = self.typed[:n], self.typed[n:]
+        return out
+
+    def recv_ready(self):
+        return bool(self.typed)
+
+    def sendall(self, data):
+        self.screen += data
+
+
+def _cli(tmp_path, typed, device='access-a1', snmp=None):
+    sw = switch_ssh.Switch(LAB.device(device), tmp_path / 'state', snmp)
+    chan = FakeChannel(typed)
+    session = switch_ssh.Session(sw, chan, 'lab', '172.31.10.31')
+    with pytest.raises(EOFError):
+        session.run()
+    return sw, chan.screen.decode().replace('\r\n', '\n')
+
+
+def test_the_switch_takes_ios_abbreviations(tmp_path):
+    _, screen = _cli(tmp_path, 'term len 0\nsh int status\nsh int gi1/0/12\nsh ver\n')
+    assert 'Gi1/0/1   seat A-1' in screen and 'connected' in screen
+    assert 'GigabitEthernet1/0/12 is up, line protocol is up (connected)' in screen
+    assert 'WS-C2960X-48TS-L' in screen
+
+
+def test_the_switch_refuses_what_ios_would(tmp_path):
+    _, screen = _cli(tmp_path, 'term len 0\nshw clock\nshow\nconf t\ninterface Gi9/9/9\n')
+    assert screen.count("% Invalid input detected at '^' marker.") == 2
+    assert '% Incomplete command.' in screen
+    assert 'access-a1(config)#' in screen and 'access-a1(config-if)#' not in screen
+
+
+def test_a_shut_port_shows_everywhere_and_survives_only_a_write(tmp_path):
+    snmp = tmp_path / 'snmp'
+    snmp.mkdir()
+    for f in (LAB_DIR / 'snmp' / 'data' / 'access-a1').glob('*.snmprec'):
+        (snmp / f.name).write_text(f.read_text())
+    _, screen = _cli(tmp_path, 'term len 0\nconf t\nint gi1/0/7\nshut\nend\nsh run\n', snmp=snmp)
+    assert 'interface GigabitEthernet1/0/7\n description seat A-7\n switchport access vlan 101\n' in screen
+    assert ' spanning-tree portfast\n shutdown\n!' in screen
+    rec = (snmp / 'public.snmprec').read_text()
+    idx = LAB.device('access-a1').port('GigabitEthernet1/0/7').if_index
+    assert f'1.3.6.1.2.1.2.2.1.7.{idx}|2|2' in rec and f'1.3.6.1.2.1.2.2.1.8.{idx}|2|2' in rec
+    # Not written: a restart brings the port back.
+    again = switch_ssh.Switch(LAB.device('access-a1'), tmp_path / 'state', snmp)
+    assert not again.ports['GigabitEthernet1/0/7']['shut']
+    assert f'1.3.6.1.2.1.2.2.1.7.{idx}|2|1' in (snmp / 'public.snmprec').read_text()
+    _cli(tmp_path, 'conf t\nint gi1/0/7\nshut\nend\nwr mem\n')
+    assert switch_ssh.Switch(LAB.device('access-a1'), tmp_path / 'state').ports['GigabitEthernet1/0/7']['shut']
+
+
+def test_clear_counters_asks_first_and_the_pager_waits(tmp_path):
+    sw, screen = _cli(tmp_path, 'clear counters gi1/0/8\n\nsh run\n q')
+    assert 'counters on this interface [confirm]' in screen
+    assert sw.ports['GigabitEthernet1/0/8']['cleared'] > sw.started
+    assert ' --More-- ' in screen and 'end\n' not in screen
+
+
+def test_the_core_speaks_nx_os(tmp_path):
+    _, screen = _cli(tmp_path, 'terminal length 0\nshow interface Eth1/49\nclear counters Eth1/49\nshow run\n',
+                     device='core-01')
+    assert 'Ethernet1/49 is up' in screen and "% Invalid command at '^' marker." in screen
+    assert 'interface Ethernet1/49\n  description uplink dist-01 TenGigabitEthernet1/1\n  no shutdown' in screen

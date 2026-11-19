@@ -11,8 +11,10 @@ check-in note and the front door. With --listeners-on, only
 that agent runs the ones that listen (two agents on one machine can't take the same port); with
 --telemetry-on, only that agent collects telemetry. Then, if the plan has no seats yet, it adds what
 lab/topology.py describes: the switches and firewalls to the inventory (with their management
-addresses, so syslog finds its device) and one seat block per access switch. Last, it sets up
-telemetry for every lab device in the inventory. Standard library only.
+addresses, so syslog finds its device), one seat block per access switch and the seat
+ranges each firewall serves. Last, it sets up
+telemetry for every lab device in the inventory, and SSH to the switches with a stored login.
+Standard library only.
 """
 import argparse
 import http.cookiejar
@@ -104,6 +106,26 @@ def plugins(fb, args):
     print('Set up the plugins: LibreNMS, syslog, NetFlow, the check-in note, the front door.')
 
 
+def switch_logins(fb, args):
+    """SSH to the switches, as the crew would set it up: the SSH port actions plugin (Cisco IOS
+    commands, the lab's SSH port) and one stored switch login for all devices. Port actions, switch
+    commands, config backups and the terminal then run through the agents without a typed login."""
+    status, answer = fb.call('PATCH', '/api/settings', {
+        'plugin.ssh-ports.platform': 'cisco_ios', 'plugin.ssh-ports.ssh_port': args.ssh_port,
+        'plugin.ssh-ports.down_seconds': 2})
+    if status != 200:
+        raise SystemExit(f'Setting up SSH port actions failed: {status} {answer}')
+    status, answer = fb.call('PUT', '/api/settings/plugins/ssh-ports', {'enabled': True})
+    if status != 200:
+        raise SystemExit(f'Turning on SSH port actions failed: {status} {answer}')
+    user, _, password = args.ssh_login.partition(':')
+    status, answer = fb.call('PUT', '/api/inventory/credentials', {
+        'owner_type': 'defaults', 'owner_id': 'defaults', 'kind': 'ssh', 'username': user, 'secret': password})
+    if status not in (200, 201):
+        raise SystemExit(f'Storing the switch login failed: {status} {answer}')
+    print(f'Set up SSH to the switches on port {args.ssh_port}.')
+
+
 def telemetry(fb, args):
     """Telemetry for every lab device, set up in the inventory as the crew would: the Telemetry
     feature and an SNMP v2c login for all devices, then per device its platform and properties
@@ -175,7 +197,15 @@ def seed(fb):
             'name': block, 'x': 20, 'y': 30 + i * 14, 'cols': SEATS_PER_BLOCK, 'rows': 1})
         if status != 201:
             raise SystemExit(f'Adding block {block} failed: {status} {body}')
-    print(f'Drew the lab hall: {len(LAB.devices)} devices, {len(LAB.seats)} seats.')
+    # The core routes blocks A and B to fw-01, C and D to fw-02, each with the other as its backup.
+    first, second = (fw.name for fw in LAB.firewalls)
+    for i, (block, vlan) in enumerate(SEAT_VLAN.items()):
+        line = [first, second] if i < len(SEAT_VLAN) // 2 else [second, first]
+        status, body = fb.call('POST', '/api/firewalls/ranges', {
+            'cidr': f'10.10.{vlan}.0/24', 'name': f'Block {block}', 'firewalls': line})
+        if status not in (200, 201):
+            raise SystemExit(f'Adding the range of block {block} failed: {status} {body}')
+    print(f'Drew the lab hall: {len(LAB.devices)} devices, {len(LAB.seats)} seats, {len(SEAT_VLAN)} firewall ranges.')
 
 
 def main(argv=None):
@@ -199,6 +229,9 @@ def main(argv=None):
     p.add_argument('--telemetry-on', default='', help='the one agent that collects telemetry')
     p.add_argument('--snmp-devices', default='',
                    help='where Telegraf polls each device, "name=host:port,..." (default: its lab address, port 161)')
+    p.add_argument('--ssh-port', type=int, default=22, help="the switches' SSH port (lab/switch_ssh)")
+    # The lab switches' own login (switch_ssh/server.py), not a secret.
+    p.add_argument('--ssh-login', default='lab:lab-switch-password', help='user:password')
     args = p.parse_args(argv)
     fb = Client(args.url)
     fb.wait()
@@ -215,6 +248,7 @@ def main(argv=None):
     plugins(fb, args)
     seed(fb)
     telemetry(fb, args)     # on the inventory devices seed() adds
+    switch_logins(fb, args)
     return 0
 
 
