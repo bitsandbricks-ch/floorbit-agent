@@ -8,7 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
-- `compose.yml` publishes the check-in note (8908) and the attendees' front door (443 to 8443) by default, since Floorbit now turns both plugins on for every agent. `CAPTIVE_PUBLISH_PORT` and `FRONT_DOOR_PUBLISH_PORT` move them when something else holds the port.
+- `compose.yml` publishes the attendees' front door (443 to 8443) by default, since Floorbit now turns it on for every agent. `FRONT_DOOR_PUBLISH_PORT` moves it when something else holds 443.
 
 ### Added
 

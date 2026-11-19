@@ -41,11 +41,10 @@ curl -s http://127.0.0.1:9520/healthz     # {"ok": true, ...} once it reached th
 That's one container. Telegraf, which collects device telemetry (SNMP, traps, gNMI, Cisco MDT),
 is in the image and runs inside the agent when the **Telemetry** plugin is on: there's no
 second container to start. `compose.yml` publishes what is needed by default (9520 on this machine
-only, 162/udp for traps, 57000 for MDT, and the check-in note on 8908 and the front door on 443,
-which are on by default in Floorbit); the ports of the other plugins that listen in the hall
-(syslog 514/udp, NetFlow 2055/udp, a firewall's own Telegraf on 8186) are commented out until you
-use them. When something else on the machine holds 443 or 8908, set `FRONT_DOOR_PUBLISH_PORT` or
-`CAPTIVE_PUBLISH_PORT`. Every port, and how to check that each
+only, 162/udp for traps, 57000 for MDT, and the front door on 443, which is on by default in
+Floorbit); the ports of the other plugins that listen in the hall (syslog 514/udp, NetFlow
+2055/udp, a firewall's own Telegraf on 8186, the check-in note on 8908) are commented out until you
+use them. When something else on the machine holds 443, set `FRONT_DOOR_PUBLISH_PORT`. Every port, and how to check that each
 one works: Floorbit's [docs/agent.md, "Ports"](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md#ports).
 
 **Updating from a compose file with a `telegraf` service:** delete that service, take the new
@@ -174,8 +173,8 @@ See [docs/vrrp.md](docs/vrrp.md).
 
 ## The check-in note (Captive Portal API)
 
-The plugin **Check-in note on phones** is on by default in Floorbit (address `0.0.0.0:8908`), so
-every agent answers `/.well-known/captive-portal`
+With the plugin **Check-in note on phones** turned on for it in Floorbit (address
+`0.0.0.0:8908`), the agent answers `/.well-known/captive-portal`
 (RFC 8908). Point DHCP option 114 at it, through the event's HTTPS reverse proxy, and phones and
 laptops show a quiet "sign in to network" note until their seat has checked in. Nothing is ever
 blocked. See Floorbit's
