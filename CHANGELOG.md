@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- The test lab runs from pulled images: its own image is published as `ghcr.io/bitsandbricks-ch/floorbit-lab` (amd64 and arm64, `latest` and the short commit) on every merge that touches `lab/`, and `lab/compose.yml` takes Floorbit, the agent and the lab from GHCR unless it is run with `--build`. A single simulated device runs with `docker run -e DEVICE=access-a1 ghcr.io/bitsandbricks-ch/floorbit-lab sh /lab/device.sh`.
 - `plugin_test`: the hosted Settings > Plugins > Test button for a plugin that reaches the event network runs here, where the plugin runs.
 - `FLOORBIT_AGENT_KEY_FILE`: the key from a file. Floorbit, which now reaches the event network only through an agent also when self-hosted, writes it for the agent next to it (its `docker-compose.yml` and Kubernetes manifest) and enrols it itself; the agent waits up to two minutes for the file.
 - The attendee front door (`FLOORBIT_AGENT_FRONT_DOOR`): the hosted Floorbit's pages served on the event network, each request with the PC's own address and the agent's key, so check-in, the seat help page and the sign-in limits work behind the hall's NAT. The seat speed test is answered here and measures the hall. A short English and German page shows while the hosted side is away. Counts in `/metrics` and the report.

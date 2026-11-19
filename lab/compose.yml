@@ -1,18 +1,21 @@
 # The hardware-free test lab (docs/lab/README.md): a hosted Floorbit, two agents, and the event
 # network simulated around them. From the repository root:
 #
-#   docker compose -f lab/compose.yml up -d --build --wait
+#   docker compose -f lab/compose.yml up -d --wait
 #   docker compose -f lab/compose.yml run --rm e2e        # the end-to-end tests
 #   open http://localhost:8080 (admin / lab-admin-password)
 #   docker compose -f lab/compose.yml down -v
 #
-# The Floorbit side is built from a checkout of bitsandbricks-ch/floorbit next to this repository
-# (LAB_FLOORBIT_SRC); the agents from this repository, on the Floorbit commit in FLOORBIT_REF.
+# Without --build every part comes from GHCR: Floorbit, the agent and the lab image, the latest
+# from their main branches (LAB_FLOORBIT_IMAGE, LAB_AGENT_IMAGE, LAB_IMAGE pick others). With
+# --build, as CI and anyone changing lab/ runs it, they are built here instead: Floorbit from a
+# checkout of bitsandbricks-ch/floorbit next to this repository (LAB_FLOORBIT_SRC), the agents
+# from this repository, on the Floorbit commit in FLOORBIT_REF.
 # Every address below is the lab's own (172.31.10.0/24); the devices' are in lab/topology.py.
 
 x-device: &device
   build: {context: ., dockerfile: Dockerfile}
-  image: floorbit-lab:local
+  image: ${LAB_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-lab:latest}
   command: ["sh", "/lab/device.sh"]
   environment: &device-env
     LAB_SYSLOG_TARGETS: 172.31.10.31:5514,172.31.10.32:5514
@@ -22,7 +25,7 @@ x-device: &device
 
 x-agent: &agent
   build: {context: .., dockerfile: Dockerfile}
-  image: floorbit-agent:lab
+  image: ${LAB_AGENT_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-agent:latest}
   # The key comes from the enrol step, through a file: an agent reads it from the environment.
   entrypoint: ["sh", "-c", "FLOORBIT_AGENT_KEY=$$(cat /keys/$$LAB_AGENT.key) exec python -m floorbit_agent"]
   environment: &agent-env
@@ -47,7 +50,7 @@ services:
 
   floorbit:
     build: {context: "${LAB_FLOORBIT_SRC:-../../floorbit}"}
-    image: floorbit:lab
+    image: ${LAB_FLOORBIT_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit:latest}
     ports: ["127.0.0.1:${LAB_PORT:-8080}:5000"]
     environment:
       REDIS_HOST: 172.31.10.3
@@ -75,7 +78,7 @@ services:
       retries: 30
 
   setup:
-    image: floorbit-lab:local
+    image: ${LAB_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-lab:latest}
     build: {context: ., dockerfile: Dockerfile}
     command: ["python", "/lab/e2e/setup.py", "--url", "http://172.31.10.2:5000", "--out", "/keys", "agent-a", "agent-b"]
     environment: {AUTH_ADMIN_USER: admin, AUTH_ADMIN_PASSWORD: lab-admin-password}
@@ -84,7 +87,7 @@ services:
     depends_on: {floorbit: {condition: service_healthy}}
 
   librenms:
-    image: floorbit-lab:local
+    image: ${LAB_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-lab:latest}
     build: {context: ., dockerfile: Dockerfile}
     command: ["python", "/lab/librenms_lite/server.py"]
     environment:
@@ -153,7 +156,7 @@ services:
     networks: {lab: {ipv4_address: 172.31.10.32}}
 
   e2e:
-    image: floorbit-lab:local
+    image: ${LAB_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-lab:latest}
     build: {context: ., dockerfile: Dockerfile}
     profiles: ["test"]
     environment:
