@@ -15,7 +15,7 @@
 # and start with LAB_SSH=1. They answer on port 2222.
 #
 # Ports: Floorbit 5000 (and its own syslog 5514), lab LibreNMS 18000, devices UDP 11161-11168, agents: syslog 5524,
-# NetFlow 2065, captive 8908, front door 8443 (agent A only), metrics 9520/9521, telemetry 8186/8187,
+# NetFlow 2065, front door 8443 and 8080 (agent A only), metrics 9520/9521, telemetry 8186/8187,
 # Redis 6390. State in $LAB_STATE (/tmp/floorbit-lab).
 set -e
 LAB=$(cd "$(dirname "$0")" && pwd)
@@ -59,7 +59,7 @@ floorbit_up() {
     FLOORBIT_DATA_FILE="$STATE/floorbit/data.json" CHECKIN_FILE="$STATE/floorbit/checkins.json" \
     FLOWS_DIR="$STATE/floorbit/flows" SEAT_SOURCE_JSON_PATH="$LAB/fixtures/seats.json" \
     AUTH_ADMIN_USER=admin AUTH_ADMIN_PASSWORD=lab-admin-password SYSLOG_ENABLED=true SYSLOG_ALLOW=127.0.0.1 \
-    CHECKIN_ENABLED=true CHECKIN_TRUST_PROXY=true CAPTIVE_ENABLED=true PUBLIC_URL=http://127.0.0.1:5000 \
+    CHECKIN_ENABLED=true CHECKIN_TRUST_PROXY=true CHECKIN_ADDRESS=127.0.0.1:8080 PUBLIC_URL=http://127.0.0.1:5000 \
     STATUS_MONITOR_INTERVAL=15 \
     $PY -m gunicorn --bind 127.0.0.1:5000 --workers 1 --worker-class gthread --threads 32 app:app \
     >> "$STATE/floorbit.log" 2>&1 &)
@@ -93,11 +93,11 @@ start() {
   for d in $DEVICES; do device_up "$d"; done
   librenms_up
   floorbit_up
-  # Both agents on one machine can't take the same ports: only agent A runs syslog, NetFlow, the
-  # note and the front door here, so the failover run has no syslog (the Docker lab has it on both).
+  # Both agents on one machine can't take the same ports: only agent A runs syslog, NetFlow and
+  # the front door here, so the failover run has no syslog (the Docker lab has it on both).
   $PY "$LAB/e2e/setup.py" --url http://127.0.0.1:5000 --out "$STATE/keys" --password lab-admin-password \
-    --librenms-url http://127.0.0.1:18000 --syslog-port 5524 --flows-port 2065 --captive 127.0.0.1:8908 \
-    --front-door 127.0.0.1:8443 --captive-proxies 127.0.0.1 --listeners-on agent-a --telemetry-on agent-a --snmp-devices "$(spec)" \
+    --librenms-url http://127.0.0.1:18000 --syslog-port 5524 --flows-port 2065 \
+    --front-door 127.0.0.1:8443 --front-door-http 127.0.0.1:8080 --proxies 127.0.0.1 --listeners-on agent-a --telemetry-on agent-a --snmp-devices "$(spec)" \
     --ssh-port 2222 agent-a agent-b
 
   # Telegraf runs inside each agent, as in the image: the one on the PATH (or TELEGRAF=...).
@@ -110,7 +110,7 @@ start() {
     (cd "$STATE/$a" && exec env PYTHONPATH="$FLOORBIT_SRC:$REPO" FLOORBIT_URL=http://127.0.0.1:5000 \
       FLOORBIT_AGENT_INSECURE=1 FLOORBIT_AGENT_KEY="$(cat "$STATE/keys/$a.key")" \
       FLOORBIT_DATA_FILE="$STATE/$a/agent-data.json" FLOWS_DIR="$STATE/$a/flows" \
-      FLOORBIT_AGENT_METRICS=127.0.0.1:$((9520 + i)) FLOORBIT_AGENT_LAN_URL=http://127.0.0.1:8908 \
+      FLOORBIT_AGENT_METRICS=127.0.0.1:$((9520 + i)) \
       FLOORBIT_TELEMETRY_PORT=$((8186 + i)) FLOORBIT_TELEGRAF_BIN="$telegraf" \
       $PY -m floorbit_agent) > "$STATE/$a.log" 2>&1 &
     echo $! > "$STATE/$a.pid"
@@ -128,7 +128,7 @@ e2e() {
   command -v "${TELEGRAF:-telegraf}" > /dev/null || export LAB_TELEGRAF=0
   LAB_FLOORBIT_URL=http://127.0.0.1:5000 LAB_ADMIN_PASSWORD=lab-admin-password \
     LAB_AGENT_METRICS=agent-a=http://127.0.0.1:9520 \
-    LAB_CAPTIVE=http://127.0.0.1:8908 LAB_FRONT_DOOR=http://127.0.0.1:8443 LAB_SSH=${LAB_SSH:-0} \
+    LAB_FRONT_DOOR=http://127.0.0.1:8080 LAB_AGENT_LOGS="$STATE/agent-a.log,$STATE/agent-b.log" LAB_SSH=${LAB_SSH:-0} \
     $PY -m pytest -q "$LAB/e2e" "$@"
 }
 

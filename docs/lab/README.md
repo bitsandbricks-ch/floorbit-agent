@@ -146,7 +146,7 @@ more from the pulled images only.
 - a player checks in, and the seat learns its switch port and MAC; history and search by IP,
   MAC and nick;
 - syslog from every kind of device arrives once, though both agents send it;
-- the NetFlow summary, the captive portal note, the agents' metrics;
+- the NetFlow summary, the note on phones, the agents' metrics;
 - failover: with agent A stopped, lookups and syslog go on through agent B;
 - SSH to the switches through the agents, with the login stored in Floorbit's inventory
   ([`lab/e2e/test_switch_ssh.py`](../../lab/e2e/test_switch_ssh.py)): the show templates on IOS
@@ -155,7 +155,14 @@ more from the pulled images only.
   and the browser terminal with the pager;
 - telemetry: every device reports to agent A's collector; Telegraf's SNMP polls show a seat
   port's traffic, the shut port and the distribution's CPU; its MAC tables and the core's ARP feed
-  the IP and MAC history; a firewall's own Telegraf push lands on that firewall.
+  the IP and MAC history; a firewall's own Telegraf push lands on that firewall;
+- in a real browser ([`lab/e2e/test_attendee_browser.py`](../../lab/e2e/test_attendee_browser.py),
+  Playwright and Chromium; skipped without): a fresh agent answers attendees on one port with nothing
+  set by hand; a seat PC checks in through the front door and the note on phones goes away; the crew
+  signs in at the front door, picks a row on the seat walk and walks a seat without leaving the page;
+  and no agent logged a stack trace. CI runs it from the runner and keeps the screenshots
+  (`lab-browser-screenshots`). Locally: `pip install playwright`, `playwright install chromium`, then
+  `LAB_SHOTS=/tmp/shots lab/run-local.sh test lab/e2e/test_attendee_browser.py`.
 
 The LAN cache numbers are skipped until Floorbit has them (bitsandbricks-ch/floorbit#660).
 

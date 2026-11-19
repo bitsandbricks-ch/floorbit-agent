@@ -21,7 +21,6 @@ import time
 
 # key -> (environment variable, takes effect without a restart)
 FIELDS = {
-    'lan_url': ('FLOORBIT_AGENT_LAN_URL', True),
     'metrics': ('FLOORBIT_AGENT_METRICS', False),
     'metrics_token': ('FLOORBIT_AGENT_METRICS_TOKEN', False),
     'buffer_max_mb': ('FLOORBIT_AGENT_BUFFER_MAX_MB', False),

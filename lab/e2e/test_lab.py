@@ -185,9 +185,9 @@ def test_netflow_summary_counts_the_seats(fb, lab):
 
 
 def test_captive_portal_note_until_checked_in(fb, lab):
-    url = os.environ.get('LAB_CAPTIVE')
+    url = os.environ.get('LAB_FRONT_DOOR')
     if not url:
-        pytest.skip('LAB_CAPTIVE is not set')
+        pytest.skip('LAB_FRONT_DOOR is not set')
     done, waiting = lab.seat('A-7'), lab.seat('A-8')
 
     def ask(seat):
