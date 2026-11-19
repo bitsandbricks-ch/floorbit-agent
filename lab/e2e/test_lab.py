@@ -217,11 +217,51 @@ def test_lan_cache_numbers(fb):
     r.raise_for_status()
 
 
-def test_device_telemetry(fb):
-    r = fb.s.get(f'{fb.url}/api/telemetry', timeout=30)
-    if r.status_code == 404:
-        pytest.skip('This Floorbit has no device telemetry yet (floorbit#661)')
-    r.raise_for_status()
+def _series(fb, device, metric, port=None):
+    params = {'device': device, 'metric': metric, 'hours': 1, **({'port': port} if port else {})}
+    return fb.get('/api/telemetry/series', params=params)['points']
+
+
+def test_every_device_reports_telemetry(fb, lab):
+    """Settings > Telemetry has every lab device; the agent's collector hears from each."""
+    def all_up():
+        items = fb.get('/api/plugins/telemetry/widgets/devices')['items']
+        return items if {i['label'] for i in items if i['state'] == 'up'} >= {d.name for d in lab.devices} else None
+    eventually(all_up, timeout=180, what='telemetry from every device')
+
+
+@pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
+def test_telegraf_polls_the_switches_through_the_agent(fb, lab):
+    """Telegraf polls the simulated Catalysts and Nexus over SNMP for the agent; the per-port numbers
+    reach Floorbit's history: traffic on a seat port, the shut port down."""
+    busy, shut = lab.seat('B-3'), lab.seat('D-12')
+    eventually(lambda: any(v > 0 for _t, v in _series(fb, busy.switch, 'in_bps', short(busy.port))),
+               timeout=240, what=f'traffic on {busy.label} from Telegraf')
+    eventually(lambda: _series(fb, shut.switch, 'up', short(shut.port))[-1][1] == 0,
+               timeout=120, what=f'{shut.label} down from Telegraf')
+    assert _series(fb, lab.dist.name, 'cpu'), 'the 4500 reports its CPU'
+
+
+@pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
+def test_telegraf_mac_tables_feed_the_ip_and_mac_history(fb, lab):
+    """Per-VLAN MAC tables (community@vlan) on the access switches and the core's ARP, polled by
+    Telegraf: each seat's machine is on its own access port, never an uplink."""
+    seat = lab.seat('A-7')
+
+    def found():
+        rows = fb.get('/api/endpoints', params={'q': seat.mac})['rows']
+        return [r for r in rows if r['mac'] == seat.mac] or None
+    rows = eventually(found, timeout=240, what=f'{seat.label} in the IP and MAC history')
+    assert {(r['device'], r['port']) for r in rows} == {(seat.switch, short(seat.port))}
+    assert rows[0]['ip'] == seat.ip
+
+
+def test_a_firewalls_own_telegraf_lands_on_the_firewall(fb, lab):
+    """OPNsense's os-telegraf pushes with its full host name (fw-01.lab.example): the numbers belong
+    to fw-01 as set up, and no second device appears."""
+    fw = lab.firewalls[0]
+    eventually(lambda: _series(fb, fw.name, 'states'), timeout=180, what=f'pf states from {fw.name}')
+    assert not _series(fb, f'{fw.name}.lab.example', 'up')
 
 
 # --- failover: run with LAB_AGENT_DOWN=agent-a after stopping it ------------------------------

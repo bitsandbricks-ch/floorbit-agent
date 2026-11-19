@@ -17,6 +17,10 @@ Where things go (env, comma-separated host:port lists; empty: that stream is off
   LAB_FLOW_TARGETS     NetFlow v9, e.g. agent-a:2055
   LAB_LANCACHE_DIR     a folder to append logs/access.log and dns/query.log to
   LAB_PUSH_URL         Influx line protocol from an OPNsense running Telegraf, POSTed here
+  LAB_STREAM_URL       the core's gNMI and Cisco MDT stream, as Telegraf's gnmi and
+                       cisco_telemetry_mdt inputs hand it on (line protocol), POSTed here
+  LAB_TELEMETRY_TOKEN_FILE  the collector's ingest token for both (an agent's
+                       plugins/telemetry/ingest-token), sent as "Authorization: Token ..."
 """
 import argparse
 import os
@@ -254,9 +258,38 @@ def opnsense_lines(rnd, now):
     return out
 
 
-def push(url, lines):
-    req = urllib.request.Request(url, data='\n'.join(lines).encode(), method='POST',
-                                 headers={'Content-Type': 'text/plain'})
+def streamed_lines(rnd, now):
+    """The Nexus core's model-driven telemetry, in the shape Telegraf hands it on: gNMI (OpenConfig
+    interface state, sampled) and Cisco MDT dial-out (the same paths, from the core's address).
+    Made from topology.py until docs/lab/capture.md brings a recorded stream to replace it."""
+    core, ns = LAB.core, int(now) * 1_000_000_000
+    out = []
+    for p in [p for p in core.ports if p.kind == 'ethernet' and p.descr]:
+        octets = (rnd + 1) * max(p.traffic_bps, 1_000_000) * 10 // 8
+        state = 'UP' if p.up else 'DOWN'
+        counters = (f'state/counters/in-octets={octets}i,state/counters/out-octets={octets // 2}i,'
+                    f'state/counters/in-errors=0i,state/counters/out-errors=0i')
+        out.append(f'fb_gnmi_if,device={core.name},driver=gnmi,name={p.name},source={core.ip} '
+                   f'{counters},state/oper-status="{state}",state/admin-status="UP" {ns}')
+        # MDT dial-out carries no device tag and no token of its own: the collector knows it by
+        # the node name (or address) the device was set up with.
+        out.append(f'fb_mdt_if,mdt_source={core.name},name={p.name} state/oper-status="{state}" {ns}')
+    return out
+
+
+def telemetry_token():
+    path = os.environ.get('LAB_TELEMETRY_TOKEN_FILE')
+    try:
+        return pathlib.Path(path).read_text().strip() if path else ''
+    except OSError:
+        return ''          # the agent hasn't written it yet: try again next round
+
+
+def push(url, lines, token=''):
+    headers = {'Content-Type': 'text/plain'}
+    if token:
+        headers['Authorization'] = f'Token {token}'
+    req = urllib.request.Request(url, data='\n'.join(lines).encode(), method='POST', headers=headers)
     with urllib.request.urlopen(req, timeout=10) as answer:
         answer.read()
 
@@ -287,10 +320,17 @@ def one_round(rnd, now, seq=0, device=None, log=print):
     if (url := os.environ.get('LAB_PUSH_URL')) and (not device or (me and me.role == 'firewall')):
         lines = [line for line in opnsense_lines(rnd, now) if not me or f'host={me.name}.' in line]
         try:
-            push(url, lines)
+            push(url, lines, telemetry_token())
             sent['push'] = len(lines)
         except OSError as exc:
             log(f'push to {url} failed: {exc}')
+    if (url := os.environ.get('LAB_STREAM_URL')) and (not device or me is LAB.core):
+        lines = streamed_lines(rnd, now)
+        try:
+            push(url, lines, telemetry_token())
+            sent['stream'] = len(lines)
+        except OSError as exc:
+            log(f'stream to {url} failed: {exc}')
     return sent
 
 

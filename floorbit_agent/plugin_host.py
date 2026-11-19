@@ -323,31 +323,41 @@ class AgentContext:
                 self.wfile.write(out)
 
             def _chunked(self):
-                """A body sent in chunks, without a length (Telegraf with gzip does that). None when
-                it is malformed or past the limit."""
+                """A chunked body (Telegraf's HTTP output sends gzip that way, with no
+                Content-Length), up to HTTP_MAX_BODY. None when the chunks are malformed, False
+                when they add up to too much."""
                 body = bytearray()
                 while True:
-                    line = self.rfile.readline(1024)
+                    line = self.rfile.readline(1026)
                     try:
                         size = int(line.split(b';', 1)[0].strip(), 16)
                     except ValueError:
                         return None
-                    if size == 0:
-                        while self.rfile.readline(1024).strip():     # trailers, then the blank line
-                            pass
-                        return bytes(body)
-                    if size < 0 or len(body) + size > HTTP_MAX_BODY:
+                    if size < 0:
                         return None
-                    body += self.rfile.read(size)
-                    self.rfile.readline(1024)                        # the chunk's CRLF
+                    if size == 0:
+                        while self.rfile.readline(1026) not in (b'\r\n', b'\n', b''):
+                            pass          # trailers: nothing here uses them
+                        return bytes(body)
+                    if len(body) + size > HTTP_MAX_BODY:
+                        return False
+                    chunk = self.rfile.read(size)
+                    if len(chunk) != size:
+                        return None
+                    body += chunk
+                    self.rfile.readline(3)
 
             def _any(self):
                 if 'chunked' in (self.headers.get('Transfer-Encoding') or '').lower():
                     body = self._chunked()
+                    if body is False:
+                        ctx.counter('http_refused')
+                        self.close_connection = True
+                        return self._reply(413, b'too large')
                     if body is None:
                         ctx.counter('http_refused')
                         self.close_connection = True
-                        return self._reply(413, b'too large or bad chunks')
+                        return self._reply(400, b'bad chunked body')
                     return self._handle(body)
                 try:
                     size = int(self.headers.get('Content-Length') or 0)

@@ -237,32 +237,6 @@ def test_listeners_stop_with_the_plugin(setup):
         urllib.request.urlopen(req, timeout=2)
 
 
-def test_a_body_sent_in_chunks_arrives_whole(setup):
-    """Telegraf with gzip sends its body in chunks, without a length: it was dropped (a broken
-    pipe in Telegraf's log)."""
-    import gzip
-    import http.client
-
-    host, _hosted, _agent, _lines = setup
-    host.pull()
-    ctx = host.running["hallthing"].ctx
-    got = []
-    port = ctx.listen_http(0, lambda m, p, h, body: (got.append(body), (204, b""))[1], host="127.0.0.1")
-    payload = gzip.compress(b"cpu,device=sw-a-01 value=1\n" * 5000)
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    conn.request("POST", "/write", body=iter([payload[:7000], payload[7000:]]), encode_chunked=True,
-                 headers={"Transfer-Encoding": "chunked", "Content-Encoding": "gzip"})
-    assert conn.getresponse().status == 204
-    assert got == [payload]
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-    conn.putrequest("POST", "/write")
-    conn.putheader("Transfer-Encoding", "chunked")
-    conn.endheaders()
-    conn.send(b"zz\r\nnot hex\r\n0\r\n\r\n")
-    assert conn.getresponse().status == 413
-    host.stop()
-
-
 def test_failed_logins_are_not_tried_again_until_cleared(setup, tmp_path):
     host, _hosted, agent, _lines = setup
     host.pull()
@@ -548,6 +522,36 @@ def test_a_listener_refuses_bad_or_huge_bodies(setup, length, status):
         s.sendall(f"POST /write HTTP/1.1\r\nHost: x\r\nContent-Length: {length}\r\n\r\n".encode())
         answer = s.recv(200).decode()
     assert answer.startswith(f"HTTP/1.0 {status}") or answer.startswith(f"HTTP/1.1 {status}")
+    assert got == []
+
+
+def test_a_listener_takes_a_chunked_body(setup):
+    """Telegraf's HTTP output sends its gzip body chunked, with no Content-Length."""
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    got = []
+    port = ctx.listen_http(0, lambda method, path, headers, body: (got.append(body), (204, b""))[1], host="127.0.0.1")
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"POST /write HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                  b"5\r\nfb_if\r\n7;ext=1\r\n,a=1 b=\r\n1\r\n2\r\n0\r\n\r\n")
+        answer = s.recv(200).decode()
+    assert answer.split()[1] == "204"
+    assert got == [b"fb_if,a=1 b=2"]
+
+
+@pytest.mark.parametrize("chunks, status", [(b"zz\r\nx\r\n0\r\n\r\n", "400"),
+                                            (b"%x\r\n" % (64 * 1024 * 1024), "413")])
+def test_a_listener_refuses_bad_or_huge_chunks(setup, chunks, status):
+    host, _hosted, _agent, _lines = setup
+    host.pull()
+    ctx = host.running["hallthing"].ctx
+    got = []
+    port = ctx.listen_http(0, lambda method, path, headers, body: (got.append(body), (204, b""))[1], host="127.0.0.1")
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"POST /write HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n" + chunks)
+        answer = s.recv(200).decode()
+    assert answer.split()[1] == status
     assert got == []
 
 

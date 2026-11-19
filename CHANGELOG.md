@@ -8,8 +8,9 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
-- Telegraf is in the image (1.40.3), and Floorbit's Telemetry plugin runs it inside the agent: device telemetry needs no `telegraf` container and no `--profile telemetry`. `compose.yml` publishes 162/udp (traps) and 57000 (MDT) by default. `FLOORBIT_TELEGRAF=sidecar` keeps the old container. Floorbit then shows why a device sends nothing, per device, and has Test now and Raw data (Floorbit's docs/agent.md, "Telegraf").
+- Telegraf is in the image (1.40.3), and Floorbit's Telemetry plugin runs it inside the agent: device telemetry needs no `telegraf` container and no `--profile telemetry`. `compose.yml` publishes 162/udp (traps) and 57000 (MDT) by default. `FLOORBIT_TELEGRAF=sidecar` keeps the old container. The test lab runs it the same way, without its telegraf service. Floorbit then shows why a device sends nothing, per device, and has Test now and Raw data (Floorbit's docs/agent.md, "Telegraf").
 - Plugin health can carry a hint code, which the hosted page turns into a translated sentence with a link.
+- Telemetry in the test lab: Floorbit's Telemetry plugin set up for every lab device, a real Telegraf polling the simulated switches through agent A, the core's gNMI and Cisco MDT streams and the firewalls' own push replayed, and end-to-end tests from a seat port's traffic to the IP and MAC history.
 - The test lab runs from pulled images: its own image is published as `ghcr.io/bitsandbricks-ch/floorbit-lab` (amd64 and arm64, `latest` and the short commit) on every merge that touches `lab/`, and `lab/compose.yml` takes Floorbit, the agent and the lab from GHCR unless it is run with `--build`. A single simulated device runs with `docker run -e DEVICE=access-a1 ghcr.io/bitsandbricks-ch/floorbit-lab sh /lab/device.sh`.
 - `plugin_test`: the hosted Settings > Plugins > Test button for a plugin that reaches the event network runs here, where the plugin runs.
 - `FLOORBIT_AGENT_KEY_FILE`: the key from a file. Floorbit, which now reaches the event network only through an agent also when self-hosted, writes it for the agent next to it (its `docker-compose.yml` and Kubernetes manifest) and enrols it itself; the agent waits up to two minutes for the file.
@@ -55,7 +56,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
-- A plugin's HTTP listener dropped bodies sent in chunks without a length (Telegraf with gzip): Telegraf logged a broken pipe and nothing it collected arrived.
+- A plugin's HTTP listener takes chunked bodies. Telegraf's HTTP output sends that way, so until now the telemetry collector dropped everything Telegraf sent. `FLOORBIT_REF` moves to the Floorbit that finds a firewall by its short name when its own Telegraf sends the full host name.
 - The seat speed test through the front door works with Floorbit from 2026-11-18 on, which counts each seat's tests on top of each client's (`FLOORBIT_REF` moves to that Floorbit).
 - Stopping the agent while it was sending syslog could fail with "pop from an empty deque" and keep the waiting lines on disk twice.
 - A syslog batch the hosted Floorbit refuses as too big is sent again in halves instead of blocking the lines behind it; a single line still too big is skipped and logged.
