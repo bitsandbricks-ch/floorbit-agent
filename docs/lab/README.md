@@ -109,7 +109,7 @@ The setup step (`lab/e2e/setup.py`) sets up the agents' plugins in Floorbit, as 
 an event: the lab LibreNMS, syslog and NetFlow from the hall, the check-in note and the attendees'
 front door (check-in takes the seat PC's address only from there). It draws the hall, plans a seat
 range per block on the firewalls (blocks A and B on fw-01, C and D on fw-02, each with the other as
-its backup), and puts every device in an inventory group with Telemetry on. The agents get only
+its backup), and sets every device up for telemetry in the inventory. The agents get only
 their URL and key.
 
 CI runs the Docker lab on every pull request (the `lab` job), normal run, the drills and failover,
@@ -163,8 +163,8 @@ minutes.
 
 ## Telemetry
 
-Setup turns on Floorbit's Telemetry plugin and puts every lab device in an inventory group with
-Telemetry on, as the crew would: SNMP v2c for all, MAC tables per seat VLAN on the Catalysts, Cisco
+Setup turns on Floorbit's Telemetry plugin and sets every lab device up for it in the inventory, as
+the crew would: the Telemetry feature and an SNMP v2c login for all devices, MAC tables per seat VLAN on the Catalysts, Cisco
 model-driven telemetry by node name on the core, the firewalls' own push. Only agent A collects
 (without VRRP both agents would count as the collector), and the Telegraf inside agent A's image
 runs the config it writes, as at an event; the devices send their traps to agent A. The core's replay also streams gNMI and Cisco MDT counters for its ports, and the

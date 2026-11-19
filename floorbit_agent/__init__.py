@@ -26,6 +26,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from . import logs
+
 KEY_HEADER = 'Floorbit-Agent-Key'
 VERSION_HEADER = 'Floorbit-Agent-Version'
 PROTOCOL_HEADER = 'Floorbit-Agent-Protocol'
@@ -375,7 +377,7 @@ def _no_redirects(requests):
 
 
 class Agent:
-    def __init__(self, url, key, execute, http=None, version='0', log=print):
+    def __init__(self, url, key, execute, http=None, version='0', log=logs.say):
         import requests
         self.url = url.rstrip('/')
         self.lan_url = os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
@@ -582,6 +584,8 @@ class Agent:
                                          headers=self._headers(), timeout=HTTP_TIMEOUT))
         self.last_contact = time.time()   # a long poll's round trip is its wait: not timed
         calls = body.get('calls') or []
+        if calls:
+            self.log(logs.debug(f'[agent] long poll brought {len(calls)} calls'))
         for call in calls:
             self.take(call)
         return len(calls)
@@ -621,6 +625,7 @@ class Agent:
                 self._waiting[method] = max(0, self._waiting.get(method, 0) - 1)
 
     def _run_one(self, call, method):
+        began = time.monotonic()
         with self._running_lock:
             self._running += 1
         try:
@@ -632,6 +637,11 @@ class Agent:
         finally:
             with self._running_lock:
                 self._running -= 1
+        took = (time.monotonic() - began) * 1000
+        if answer['ok']:
+            self.log(logs.debug(f'[agent] call {method} answered in {took:.0f} ms'))
+        else:
+            self.log(logs.warning(f'[agent] call {method} failed after {took:.0f} ms: {answer["error"]}'))
         self.metrics.inc('floorbit_agent_calls_total', {'method': method, 'outcome': 'ok' if answer['ok'] else 'error'})
         self._answer(call, answer)
 
@@ -700,13 +710,13 @@ class Agent:
                 return True
             if self.link_opened:
                 self.metrics.inc('floorbit_agent_link_drops_total')
-                self.log(f'[agent] the WebSocket link dropped ({exc}); connecting again')
+                self.log(logs.warning(f'[agent] the WebSocket link dropped ({exc}); connecting again'))
                 if time.monotonic() - started < LINK_STEADY:
                     # Something on the way cuts it right after the upgrade: don't spin, poll a while.
                     self.link_after = time.monotonic() + LINK_RETRY
                 return True
-            self.log(f'[agent] no WebSocket link ({exc}); using the HTTPS long poll, '
-                     f'trying the link again in {LINK_RETRY // 60} minutes')
+            self.log(logs.warning(f'[agent] no WebSocket link ({exc}); using the HTTPS long poll, '
+                                  f'trying the link again in {LINK_RETRY // 60} minutes'))
             self.link_after = time.monotonic() + LINK_RETRY
             return False
 
@@ -733,9 +743,9 @@ class Agent:
             except Exception as exc:  # noqa: BLE001  # network trouble: wait and try again
                 if connected:
                     self.metrics.inc('floorbit_agent_reconnects_total')
-                    self.log(f'[agent] lost the connection to {self.url}: {exc}')
+                    self.log(logs.warning(f'[agent] lost the connection to {self.url}: {exc}'))
                 else:
-                    self.log(f'[agent] cannot reach {self.url} ({exc}); trying again in {backoff} s')
+                    self.log(logs.warning(f'[agent] cannot reach {self.url} ({exc}); trying again in {backoff} s'))
                 self.metrics.set('floorbit_agent_connected', 0)
                 connected = False
                 self._stop.wait(backoff)
@@ -824,7 +834,7 @@ def start_plugins(agent, app):
     local = LocalPlugins(app, sources.registry, root)
     host = PluginHost(agent, agent_specs(sources.registry), root, local=local)
     from .bundles import Updater
-    host.updater = Updater(agent, sources.registry, root, floorbit_version(app), log=print)
+    host.updater = Updater(agent, sources.registry, root, floorbit_version(app), log=logs.say)
     host.updater.restore()
     host.specs = agent_specs(sources.registry)      # with the bundles installed before
     agent.plugins = host
@@ -896,11 +906,11 @@ def key_from_file(path, wait=KEY_FILE_WAIT, sleep=time.sleep):
         except OSError:
             pass
         if time.monotonic() >= deadline:
-            print(f'[agent] {path} did not appear: is Floorbit running with FLOORBIT_LOCAL_AGENT_KEY_FILE?',
-                  file=sys.stderr)
+            logs.say(logs.error(f'[agent] {path} did not appear: is Floorbit running with '
+                                'FLOORBIT_LOCAL_AGENT_KEY_FILE?'))
             return ''
         if not told:
-            print(f'[agent] waiting for Floorbit to write the key to {path}', flush=True)
+            logs.say(f'[agent] waiting for Floorbit to write the key to {path}')
             told = True
         sleep(1)
 
@@ -917,6 +927,7 @@ def main(argv=None):
         os.environ.setdefault('FLOORBIT_DATA_FILE', os.path.abspath('agent-data.json'))
         from .bundles import cli
         return cli(argv[1:], state_root())
+    level = logs.setup(os.environ)
     url = os.environ.get('FLOORBIT_URL', '').strip()
     key = (os.environ.get('FLOORBIT_AGENT_KEY', '').strip()
            or key_from_file(os.environ.get('FLOORBIT_AGENT_KEY_FILE', '')))
@@ -966,10 +977,16 @@ def main(argv=None):
     from . import metrics as agent_metrics
     metrics_server = agent_metrics.serve(agent.metrics, agent, os.environ.get('FLOORBIT_AGENT_METRICS', '0.0.0.0:9520'),
                                          HEALTHY_FOR, os.environ.get('FLOORBIT_AGENT_METRICS_TOKEN') or None)
-    keepalived = start_vrrp(agent, os.environ)
+    logs.say(f'[agent] Floorbit agent {version} starting: hosted Floorbit {url}, log level {level}, '
+             f'status page and metrics on {os.environ.get("FLOORBIT_AGENT_METRICS", "0.0.0.0:9520")}')
+    keepalived = start_vrrp(agent, os.environ, out=logs.say)
     host.vrrp = keepalived or None
     agent.metrics.collect(host.collect)
     host.start()
+    from . import status_page
+    reporter = logs.Reporter(lambda: status_page.status(agent, agent_metrics.health_of(agent, HEALTHY_FOR)[1]),
+                             logs.summary_every(os.environ))
+    reporter.start()
     if keepalived is False:
         host.stop()
         if metrics_server:
@@ -980,12 +997,13 @@ def main(argv=None):
     try:
         agent.run()
     except Refused as exc:
-        print(f'[agent] {exc}', file=sys.stderr)
+        logs.say(logs.error(f'[agent] {exc}'))
         return 1
     except KeyboardInterrupt:
         agent.stop()
-        print('[agent] stopping')
+        logs.say('[agent] stopping')
     finally:
+        reporter.stop()
         host.stop()
         if keepalived:
             keepalived.stop()

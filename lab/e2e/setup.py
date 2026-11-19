@@ -7,12 +7,13 @@ Signs in as the admin, enrols each agent and writes its key to <out>/<name>.key 
 it at start); an agent whose key file is there already is left alone, so a restart keeps its keys.
 It sets up the agents' plugins in Floorbit, as the crew would at an event (the agents read none
 of it from their own environment): the lab LibreNMS, syslog and NetFlow from the hall, the
-check-in note and the front door. With --listeners-on, only that agent runs the ones that listen
-(two agents on one machine can't take the same port); with --telemetry-on, only that agent
-collects telemetry. If the plan has no seats yet, it adds what lab/topology.py describes: the
-switches and firewalls to the inventory (with their management addresses, so syslog finds its
-device), one seat block per access switch and the seat ranges each firewall serves. Last, it puts
-every device in an inventory group with Telemetry on. Standard library only.
+check-in note and the front door. With --listeners-on, only
+that agent runs the ones that listen (two agents on one machine can't take the same port); with
+--telemetry-on, only that agent collects telemetry. Then, if the plan has no seats yet, it adds what
+lab/topology.py describes: the switches and firewalls to the inventory (with their management
+addresses, so syslog finds its device), one seat block per access switch and the seat
+ranges each firewall serves. Last, it sets up
+telemetry for every lab device in the inventory. Standard library only.
 """
 import argparse
 import http.cookiejar
@@ -105,28 +106,32 @@ def plugins(fb, args):
 
 
 def telemetry(fb, args):
-    """Telemetry for every lab device, as the crew would set it up in the inventory: a group with the
-    Telemetry feature on and the SNMP community, each device in it with what its kind needs (MAC
-    tables per VLAN on the Catalysts, model-driven telemetry by node name on the core, the
-    firewalls' own Telegraf push). Floorbit collects what the inventory says (docs/telemetry.md)."""
-    where = dict(item.split('=', 1) for item in args.snmp_devices.split(',') if '=' in item)
-    _, groups = fb.call('GET', '/api/inventory/groups')
-    group = next((g for g in (groups or {}).get('groups', []) if g['name'] == 'Lab telemetry'), None)
-    if group is None:
-        status, group = fb.call('POST', '/api/inventory/groups',
-                                {'name': 'Lab telemetry', 'features': {'telemetry': True}})
-        if status not in (200, 201):
-            raise SystemExit(f'Adding the telemetry group failed: {status} {group}')
-        group = group.get('group', group)
-    status, answer = fb.call('PUT', '/api/inventory/credentials', {
-        'owner_type': 'group', 'owner_id': group['id'], 'kind': 'snmp_v2c', 'secret': 'public'})
+    """Telemetry for every lab device, set up in the inventory as the crew would: the Telemetry
+    feature and an SNMP v2c login for all devices, then per device its platform and properties
+    (Catalyst MAC tables per VLAN, the core's model-driven telemetry by its node name, the
+    firewalls' own Telegraf push, and where Telegraf polls it when that isn't its lab address)."""
+    status, answer = fb.call('PUT', '/api/settings/plugins/telemetry', {'enabled': True})
     if status != 200:
-        raise SystemExit(f'Setting the lab SNMP community failed: {status} {answer}')
+        raise SystemExit(f'Turning on telemetry failed: {status} {answer}')
+    status, answer = fb.call('PATCH', '/api/inventory/defaults', {'features': {'telemetry': True}})
+    if status != 200:
+        raise SystemExit(f'Turning on telemetry for all devices failed: {status} {answer}')
+    status, answer = fb.call('PUT', '/api/inventory/credentials', {
+        'owner_type': 'defaults', 'owner_id': 'defaults', 'kind': 'snmp_v2c', 'secret': 'public'})
+    if status not in (200, 201):
+        raise SystemExit(f'Setting the SNMP community failed: {status} {answer}')
+    where = dict(item.split('=', 1) for item in args.snmp_devices.split(',') if '=' in item)
     _, inv = fb.call('GET', '/api/inventory')
     ids = {d['name']: d['id'] for d in inv.get('devices', [])}
     for dev in LAB.devices:
+        if dev.name not in ids:
+            raise SystemExit(f'{dev.name} is not in the inventory')
         host, _, port = where.get(dev.name, dev.ip).partition(':')
-        props = {'telemetry_address': host, 'telemetry_port_snmp': port}
+        props = {'telemetry_drivers': 'snmp traps'}
+        if host != dev.ip:
+            props['telemetry_address'] = host
+        if port:
+            props['telemetry_port_snmp'] = port
         if dev.role == 'firewall':
             platform, props['telemetry_drivers'] = 'OPNsense', 'snmp push'
         elif dev.role == 'core':
@@ -136,16 +141,11 @@ def telemetry(fb, args):
             platform = 'IOS'
             vlans = sorted(SEAT_VLAN.values()) if dev.role == 'distribution' else sorted(
                 {s.vlan for s in LAB.seats if s.switch == dev.name})
-            props.update(telemetry_drivers='snmp traps', telemetry_fdb='cisco_vlans',
-                         telemetry_vlans=' '.join(map(str, vlans)))
-        body = {'group_id': group['id'], 'platform': platform,
-                'properties': {k: v for k, v in props.items() if v}}
+            props.update(telemetry_fdb='cisco_vlans', telemetry_vlans=' '.join(str(v) for v in vlans))
+        body = {'platform': platform, 'properties': props}
         status, answer = fb.call('PATCH', f'/api/inventory/{ids[dev.name]}', body)
         if status != 200:
             raise SystemExit(f'Setting up telemetry for {dev.name} failed: {status} {answer}')
-    status, answer = fb.call('PUT', '/api/settings/plugins/telemetry', {'enabled': True})
-    if status != 200:
-        raise SystemExit(f'Turning on telemetry failed: {status} {answer}')
     print(f'Set up telemetry for {len(LAB.devices)} devices.')
 
 
@@ -223,7 +223,7 @@ def main(argv=None):
         print(f'Enrolled {name} as {body["id"]}')
     plugins(fb, args)
     seed(fb)
-    telemetry(fb, args)
+    telemetry(fb, args)     # on the inventory devices seed() adds
     return 0
 
 

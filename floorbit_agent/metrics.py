@@ -23,7 +23,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler
 
-from . import http_limits
+from . import http_limits, logs
 
 BUCKETS = (0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60)
 
@@ -189,7 +189,7 @@ def health_of(agent, healthy_for, now=None):
     return ok, details
 
 
-def serve(metrics, agent, address, healthy_for, token=None, log=print):
+def serve(metrics, agent, address, healthy_for, token=None, log=logs.say):
     """Start the endpoint in a thread; returns the server (``.shutdown()`` stops it), or None when
     turned off or the address can't be used."""
     address = (address or '').strip()

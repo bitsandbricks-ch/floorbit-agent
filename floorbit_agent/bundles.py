@@ -25,6 +25,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import logs
+
 PROBATION = 300          # seconds a new version must stay healthy
 POLICIES = ('auto', 'approve', 'off')
 MAX_EVENTS = 20
@@ -41,7 +43,7 @@ def policy(env):
 
 
 class Updater:
-    def __init__(self, agent, registry, state_root, image_version, env=None, keys=None, log=print, clock=time.time):
+    def __init__(self, agent, registry, state_root, image_version, env=None, keys=None, log=logs.say, clock=time.time):
         from floorbit.plugins import bundles
         self.b = bundles
         self.agent, self.registry, self.log, self.clock = agent, registry, log, clock
