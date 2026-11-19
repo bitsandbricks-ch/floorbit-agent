@@ -20,6 +20,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Answers `device_facts` (Floorbit #966): what a device is (VLANs, networks, transceivers, ...) for discovery, from telemetry first and LibreNMS for the rest, so discovery works with LibreNMS alone.
 - Drills in the test lab (`lab/e2e/test_drills.py`): a firewall and an access switch die and come back, LibreNMS goes away, the hosted Floorbit goes away and comes back; CI runs each. The lab plans a seat range per block on its firewalls.
 - The test lab's switches answer SSH as Cisco IOS and NX-OS (`lab/switch_ssh`), and the lab stores a switch login in Floorbit: the end-to-end tests run the switch command templates, a config backup, port shut, turn on and bounce, Clear port counters and the browser terminal through the agents. A shut port changes the switch's SNMP, syslog, traps and running config, as at the event.
 - `lab/senders.yml`: an agent of yours with the lab's simulated hall around it, sending syslog, traps, NetFlow, the gNMI/MDT stream and the firewalls' push, for a Floorbit you test with.
@@ -80,6 +81,8 @@ All notable changes to this project are listed here. The format follows
 - A plugin thread that stops with an error is started again: after 5 seconds, then 10, 20 and so on, up to 5 minutes. Before, it stayed stopped until the agent restarted. After five failures in a row, the plugin's health says how often it failed; a run of 10 minutes resets the count. `/metrics` counts the restarts (`thread_restarts`).
 
 ### Fixed
+
+- The test lab's Catalysts answer a per-VLAN SNMP walk for every VLAN they list (VLAN 1 on all of them, VLAN 100 on dist-01), with an empty MAC table, as real Cisco IOS does. Before, those walks timed out in the lab.
 
 - SNMP traps get through: Telegraf dropped every linkDown/linkUp with "Error resolving OID", because it named OIDs with net-snmp's `snmptranslate`, which the image doesn't have. `FLOORBIT_REF` moves to the Floorbit whose Telegraf config uses Telegraf's own MIB reader (gosmi) instead. The lab now checks that traps get through.
 - A plugin's HTTP listener takes chunked bodies. Telegraf's HTTP output sends that way, so until now the telemetry collector dropped everything Telegraf sent. `FLOORBIT_REF` moves to the Floorbit that finds a firewall by its short name when its own Telegraf sends the full host name.

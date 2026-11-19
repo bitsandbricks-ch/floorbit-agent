@@ -50,7 +50,8 @@ REPORT_EVERY = 30         # seconds between reports to the hosted side (its Loca
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
-           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'dns_probe', 'tcp_probe', 'plugin', 'plugins_reload',
+           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'device_facts', 'dns_probe', 'tcp_probe', 'plugin',
+           'plugins_reload',
            'switch_call', 'shell_open', 'shell_io', 'shell_close', 'plugin_test')
 # Pools bigger than WORKERS: a switch command runs on many switches at once, and each open terminal
 # keeps one shell_io read waiting on the switch. Seat lookups come in bursts when doors open (a
@@ -290,6 +291,11 @@ def local_executor(app, plugins_ref=None):
             spec = registry.monitoring_source() if registry is not None else None
             if spec is None:
                 raise PluginError('No monitoring plugin is set up on the agent (LIBRENMS_URL and LIBRENMS_TOKEN?)')
+            if method == 'device_facts':
+                # Telemetry's facts first, the other monitoring plugins fill the gaps (Floorbit #966).
+                # A Floorbit before #966 has no merge: the chosen plugin answers alone.
+                merged = getattr(sources.PluginMonitoring(registry, spec), 'device_facts', None)
+                return merged(*args) if merged else registry.call(spec, method, *args)
             return registry.call(spec, method, *args)
     return execute
 
