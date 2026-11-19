@@ -119,6 +119,7 @@ def test_the_speed_test_is_answered_here(door):
     r, _ = ask(port, 'GET', '/help/A-1/speed/ping')
     assert r.status == 200
     assert http.calls == [] and d.counts['speed'] == 3
+    assert 'A-1' in speedtest._seat_spent   # the seat's own budget counts too, as on the hosted side
     # The result still goes to the hosted side, which keeps it with the seat.
     ask(port, 'POST', '/help/A-1/speed/result', body=b'{"down_mbps": 900}')
     assert http.calls[0]['url'].endswith('/help/A-1/speed/result')

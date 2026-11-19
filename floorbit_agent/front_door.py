@@ -28,7 +28,7 @@ import re
 import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 DOOR_HEADER = 'Floorbit-Front-Door'
 CLIENT_HEADER = 'Floorbit-Client-IP'
@@ -43,7 +43,7 @@ TIMEOUT = 60                       # seconds to wait for the hosted side to star
 STREAM_TIMEOUT = 330               # a live-update stream or a long poll may be quiet this long
 CHUNK = 64 * 1024
 MAX_OPEN = 200                     # requests passed on at once; more get 503 at once
-SPEED_RE = re.compile(r'^/help/[^/]{1,40}/speed/(ping|down|up)$')
+SPEED_RE = re.compile(r'^/help/([^/]{1,40})/speed/(ping|down|up)\Z')
 BLOCKED = ('/api/agent/',)
 # While the hosted side can't be reached: attendees see this, in both languages Floorbit speaks.
 AWAY_PAGE = b'''<!doctype html><html><head><meta charset="utf-8">
@@ -114,15 +114,15 @@ class FrontDoor:
         return value
 
 
-def _speed(handler, ip, kind, method):
-    """The speed test's bytes, answered here. Shares Floorbit's per-client budget and stream cap."""
+def _speed(handler, ip, seat, kind, method):
+    """The speed test's bytes, answered here. Shares Floorbit's per-client and per-seat budget and stream cap."""
     from floorbit import speedtest
     if kind == 'ping':
         return handler.reply(200, b'', 'application/octet-stream')
     if kind == 'down' and method == 'GET':
         try:
             size = max(1, min(int(handler.query.get('bytes') or 0), speedtest.MAX_DOWN))
-            speedtest.take(ip or '?', size)
+            speedtest.take(ip or '?', unquote(seat).strip().upper(), size)
         except ValueError:
             return handler.reply(400, b'{"error": "bytes is a number."}', 'application/json')
         except speedtest.SpeedtestError as exc:
@@ -143,7 +143,7 @@ def _speed(handler, ip, kind, method):
         if size <= 0:
             return handler.reply(411, b'{"error": "Send the bytes to upload."}', 'application/json')
         try:
-            speedtest.take(ip or '?', size)
+            speedtest.take(ip or '?', unquote(seat).strip().upper(), size)
         except speedtest.SpeedtestError as exc:
             return handler.reply(exc.status, json.dumps({'error': str(exc)}).encode(), 'application/json')
         got = speedtest.swallow(handler.rfile, size)
@@ -183,7 +183,7 @@ def handler_for(door):
             speed = SPEED_RE.match(path)
             if speed:
                 door.count('speed')
-                return _speed(self, ip, speed.group(1), self.command)
+                return _speed(self, ip, speed.group(1), speed.group(2), self.command)
             if not door.enter():
                 return self.reply(503, b'The front door is busy. Try again in a moment.', 'text/plain')
             try:
