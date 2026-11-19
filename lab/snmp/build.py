@@ -224,6 +224,13 @@ def vlans(w, ids):
         w.add(f'1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.{vlan}', STR, 'default' if vlan == 1 else _vlan(vlan))
 
 
+def empty_bridge(dev):
+    """A VLAN's bridge context with its ports but no learned MACs."""
+    w = Walk()
+    bridge_ports(w, dev)
+    return w.text()
+
+
 def _vlan(vlan):
     return {INFRA_VLAN: 'infra', SERVER_VLAN: 'servers'}.get(vlan) or f'seats-{"ABCD"[vlan - 101]}'
 
@@ -310,6 +317,10 @@ def build():
         rows.append((core.router_mac, 'TenGigabitEthernet1/1'))
         fdb(v, rows, numbers)
         out[dist.name][f'public@{vlan}'] = v.text()
+    # Real IOS answers community@<vlan> for every VLAN VTP lists, even one with no learned MACs;
+    # without these files snmpsim stays silent and a per-VLAN walk times out.
+    for vlan in (1, INFRA_VLAN):
+        out[dist.name][f'public@{vlan}'] = empty_bridge(dist)
 
     # Access: MAC tables only. The seat's MAC on its port, the gateway and firewalls on the uplink.
     for sw in LAB.access:
@@ -330,6 +341,7 @@ def build():
         rows += [(core.router_mac, 'GigabitEthernet1/0/49')]
         fdb(v, rows, numbers)
         out[sw.name][f'public@{SEAT_VLAN[block]}'] = v.text()
+        out[sw.name]['public@1'] = empty_bridge(sw)
 
     for fw in LAB.firewalls:
         w = Walk()
