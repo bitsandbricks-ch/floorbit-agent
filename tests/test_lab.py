@@ -132,6 +132,19 @@ def test_the_cores_stream_reaches_its_ports_in_floorbits_collector():
     assert set(picture.devices) == {LAB.core.name}, 'MDT found the core by its node name'
 
 
+def test_the_wireless_controllers_stream_gives_its_aps():
+    state = pytest.importorskip('floorbit.telemetry.state')
+    from topology import WLC
+    picture = state.State()
+    picture.know([{'name': WLC.name, 'address': WLC.ip, 'mdt_node': WLC.name, 'drivers': ['mdt']}])
+    now = time.time()
+    used, total, bad = picture.apply_text('\n'.join(replay.wireless_lines(0, now)), now)
+    assert used == total and not bad
+    aps = {a['name']: a for a in picture.device(WLC.name).wifi_aps(now)}
+    assert set(aps) == {ap.name for ap in WLC.aps}
+    assert aps['ap-hall-b']['radios'][1] == {'band': '5', 'channel': 52, 'width': 80, 'utilization': 77, 'clients': 38}
+
+
 def test_telemetry_pushes_carry_the_ingest_token(monkeypatch, tmp_path):
     (tmp_path / 'token').write_text('fba_lab\n')
     monkeypatch.setenv('LAB_TELEMETRY_TOKEN_FILE', str(tmp_path / 'token'))
