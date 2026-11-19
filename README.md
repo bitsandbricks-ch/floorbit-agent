@@ -65,11 +65,12 @@ Every setting, what works through the agent and the protocol are in Floorbit's
 ## Settings from Floorbit
 
 Each agent's page in Floorbit (**Local agents**, one agent, **Settings**) sets where laptops reach
-it, its metrics port and token, its disk buffer, the Telegraf port, VRRP and the plugin settings that
+it, its metrics port and token, its disk buffer, the Telegraf port, the log level and summary line,
+VRRP and the plugin settings that
 differ on this agent (the flow port, a listen address). The agent takes them with its plugin config,
 keeps them in its state folder (`agent-settings.json`) and starts with them next time. Its own
 environment variable still wins when it is set; the page shows where each value comes from and
-which take effect at the next start.
+which take effect at the next start (the address and the log level apply at once).
 
 What the hall allows stays in the agent's environment only and is shown read-only:
 `FLOORBIT_AGENT_ALLOW_ACTIONS`, `FLOORBIT_AGENT_PLUGIN_UPDATES` and the networks it may reach

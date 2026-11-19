@@ -145,3 +145,19 @@ def test_a_certificate_the_hall_set_wins_and_a_refusal_waits(agent, tmp_path):
     assert len(agent.http.posts) == asked                     # not again within CERT_RETRY
 
 
+
+
+def test_log_level_from_floorbit_now_and_hall_alias_wins(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(hosted, "_relevel", lambda env: calls.append(env.get("FLOORBIT_AGENT_LOG_LEVEL")))
+    env = {}
+    s = hosted.Settings(str(tmp_path), env, log=lambda *_: None)
+    assert s.take({"log_level": "debug", "log_summary": 60})
+    assert env["FLOORBIT_AGENT_LOG_LEVEL"] == "debug" and calls == ["debug"]   # taken now
+    assert s.pending == {"log_summary"}                                        # read at the next start
+
+    hall = {"LOG_LEVEL": "warning"}
+    s = hosted.Settings(str(tmp_path / "b"), hall, log=lambda *_: None)
+    s.take({"log_level": "debug"})
+    assert "FLOORBIT_AGENT_LOG_LEVEL" not in hall
+    assert s.report()["values"]["log_level"] == {"source": "env", "value": "warning"}

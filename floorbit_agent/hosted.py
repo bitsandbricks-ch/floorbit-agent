@@ -32,7 +32,11 @@ FIELDS = {
     'vrrp_prefer': ('FLOORBIT_AGENT_VRRP_PREFER', False),
     'vrrp_id': ('FLOORBIT_AGENT_VRRP_ID', False),
     'vrrp_peers': ('FLOORBIT_AGENT_VRRP_PEERS', False),
+    'log_level': ('FLOORBIT_AGENT_LOG_LEVEL', True),
+    'log_summary': ('FLOORBIT_AGENT_LOG_SUMMARY', False),
 }
+# Other names the hall may have used for the same setting; they win too.
+ALIASES = {'FLOORBIT_AGENT_LOG_LEVEL': ('LOG_LEVEL',)}
 SECRETS = ('metrics_token',)
 LOCAL_ONLY = ('FLOORBIT_AGENT_ALLOW_ACTIONS', 'FLOORBIT_AGENT_PLUGIN_UPDATES', 'FLOORBIT_AGENT_SWITCH_NETS',
               'FLOORBIT_AGENT_GAME_NETS', 'FLOORBIT_AGENT_PROBE_NETS')
@@ -60,13 +64,26 @@ def _as_env(value):
     return str(value)
 
 
+def _relevel(env):
+    # The log level is read at startup (logs.setup); setting it up again takes the new level now.
+    try:
+        from . import logs
+    except ImportError:
+        return
+    setup = getattr(logs, 'setup', None)
+    if setup:
+        setup(env)
+
+
 class Settings:
     def __init__(self, root, env=None, log=print):
         self.env = os.environ if env is None else env
         self.root = root
         self.log = log
         # What the hall set itself, before anything from Floorbit went in: that wins.
-        self.own = {var: str(self.env.get(var) or '').strip() for var, _ in FIELDS.values()}
+        self.own = {var: next((str(self.env.get(v) or '').strip() for v in (var, *ALIASES.get(var, ()))
+                              if str(self.env.get(v) or '').strip()), '')
+                    for var, _ in FIELDS.values()}
         self.values = self._load()
         self.pending = set()
         self._apply(self.values, starting=True)
@@ -96,6 +113,8 @@ class Settings:
                 self.env.pop(var, None)
             if not starting and not live:
                 self.pending.add(key)
+            if not starting and key == 'log_level':
+                _relevel(self.env)
 
     def take(self, settings):
         """Floorbit's settings for this agent. True when they changed."""
