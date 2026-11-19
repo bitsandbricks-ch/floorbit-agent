@@ -58,6 +58,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
+- Test lab: the two Telegraf polling tests set Telemetry's "Who polls the switches" to Telemetry while they run, and back to auto afterwards: Floorbit #945 leaves ports and ARP/MAC tables to LibreNMS when it is on, as it is in the lab.
 - **Plugins are set up only in Floorbit.** The agent no longer reads `LIBRENMS_URL`, `NETBOX_URL`, `FLOORBIT_PLUGIN_*`, `FLOORBIT_AGENT_PLUGINS` or its relays (`FLOORBIT_AGENT_SYSLOG_PORT`, `_FLOWS_PORT`, `_CAPTIVE`, `_FRONT_DOOR` and their siblings) from its environment: syslog, NetFlow, the check-in note and the attendee front door run as the plugins Floorbit turns on for it. The first time it gets through after the update, it hands what those variables set to the hosted Floorbit once, which takes it over for each plugin not set up there yet and logs it in its audit log; the agent says which variables to remove. Update Floorbit first. The agent's env keeps only its own settings (URL and key, buffer, metrics, VRRP, allowed actions, plugin updates, TLS certificate).
 - Each plugin's disk buffer follows `FLOORBIT_AGENT_BUFFER_MAX_MB` and `FLOORBIT_AGENT_BUFFER_MAX_HOURS` (2 GB and 24 hours each by default); a value that is no size keeps the default instead of turning the buffer off.
 - `/metrics`: syslog, NetFlow and captive numbers are now the plugins' own, `floorbit_agent_plugin_<name>{plugin="<id>"}`, instead of `floorbit_agent_syslog_*`, `floorbit_agent_flows_*` and `floorbit_agent_captive_*`. The Grafana dashboard follows.

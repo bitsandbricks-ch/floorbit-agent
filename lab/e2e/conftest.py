@@ -79,6 +79,9 @@ class Floorbit:
     def post(self, path, body=None, **kw):
         return self.s.post(f'{self.url}{path}', json=body, timeout=60, **kw)
 
+    def patch(self, path, body=None, **kw):
+        return self.s.patch(f'{self.url}{path}', json=body, timeout=60, **kw)
+
 
 @pytest.fixture(scope='session')
 def lab():
