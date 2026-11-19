@@ -8,6 +8,10 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Settings from Floorbit: the agent's page in Floorbit sets where laptops reach it, its metrics port and token, its disk buffer, the Telegraf port, the log level (`FLOORBIT_AGENT_LOG_LEVEL`, applied at once) and summary interval (`FLOORBIT_AGENT_LOG_SUMMARY`), and VRRP. The agent keeps them in its state folder and starts with them; its own environment variables still win, and the report says where each value comes from and which wait for a restart. What the hall allows (actions, plugin updates, the networks it may reach) stays in its environment only.
+- Key rolling without editing the environment: asked on its page in Floorbit, the agent fetches a new key, keeps it in its state folder and uses it from then on. When that key is refused (enrolled again), it goes back to `FLOORBIT_AGENT_KEY`.
+- Certificates from Floorbit's agents CA: the agent makes its own key, Floorbit signs it for the names listed on the agent's page, and the HTTPS listeners serve with it; renewed 30 days before the end. `FLOORBIT_AGENT_TLS_CERT` set in the hall wins.
+
 - One agent per device: a device whose inventory names an agent (`telemetry_agent`) is polled only by that agent, also while it is the VRRP standby, and goes back to the others while it is away. Telemetry ports per kind (SNMP, gNMI, API). Built on Floorbit with bitsandbricks-ch/floorbit#857.
 - Built on Floorbit with bitsandbricks-ch/floorbit#858 (Telemetry under Monitoring, devices set up only in the inventory). The test lab now sets its devices up for telemetry in the inventory: the Telemetry feature and an SNMP v2c login for all devices, and per device its platform and `telemetry_*` properties.
 - A log worth reading: every line has the time, the level and the part that speaks. It says when the agent connects or loses the link, when a plugin starts, stops, fails or changes state, when Telegraf starts, stops or reloads, each Test now, and every minute what each device gave; a summary line every five minutes (`FLOORBIT_AGENT_LOG_SUMMARY`). `FLOORBIT_AGENT_LOG_LEVEL=debug` adds every call, send and Telegraf line.
