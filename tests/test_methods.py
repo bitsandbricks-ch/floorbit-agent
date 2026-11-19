@@ -40,6 +40,39 @@ def test_lldp_neighbours_go_to_the_plugin(monkeypatch):
     assert registry.calls == [('librenms', 'neighbours', ('sw-a-01',))]
 
 
+def test_device_facts_go_to_the_monitoring_plugins(monkeypatch):
+    class Spec:
+        id = name = 'librenms'
+
+        def plugin_class(self):
+            class P:
+                def configured(self):
+                    return True
+
+                def device_facts(self, hostname):
+                    return {}
+            return P
+
+    spec = Spec()
+
+    class Facts(Registry):
+        def monitoring_source(self):
+            return spec
+
+        def monitoring_sources(self):
+            return [spec]
+
+        def call(self, spec, method, *args):
+            self.calls.append((spec.id, method, args))
+            return {'vlans': {'10': 'seats'}}
+
+    registry = Facts()
+    monkeypatch.setattr(sources, 'registry', registry)
+    got = floorbit_agent.local_executor(flask.Flask('test'))('device_facts', ['sw-a-01'])
+    assert got == {'vlans': {'10': 'seats'}}
+    assert registry.calls == [('librenms', 'device_facts', ('sw-a-01',))]
+
+
 def test_firewall_ranges_come_from_the_agents_netbox(monkeypatch):
     from floorbit import firewalls
 
