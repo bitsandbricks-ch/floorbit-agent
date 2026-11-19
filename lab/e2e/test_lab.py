@@ -302,10 +302,10 @@ def test_telegraf_takes_the_switches_traps(fb, lab):
 @pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0' or not os.environ.get('LAB_TRAP_V3'),
                     reason='no Telegraf or no SNMPv3 trap user in this lab')
 def test_a_devices_own_snmpv3_trap_user_gets_its_listener(fb, lab):
-    """access-a1 sends traps as its own SNMPv3 user (floorbit#975): Floorbit gives that user the
-    first further listener, and the agent's Telegraf takes both its v3 trap and a v2c one sent to
-    the same port. Each trap names a port no poll reports, so each one adds a port to access-a1
-    that its twin access-b1 doesn't have."""
+    """access-a1 sends traps as its own SNMPv3 user (floorbit#975). It is the lab's only v3 trap user,
+    so Floorbit gives it the usual listener (a further user would get the next one), and the agent's
+    Telegraf takes both its v3 trap and a v2c one sent to the same port. Each trap names a port no
+    poll reports, so each one adds a port to access-a1 that its twin access-b1 doesn't have."""
     device, _, rest = os.environ['LAB_TRAP_V3'].partition('=')
     port = int(rest.rpartition(':')[2])
     ids = {d['name']: d['id'] for d in fb.get('/api/inventory')['devices']}

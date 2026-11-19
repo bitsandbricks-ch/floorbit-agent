@@ -21,8 +21,9 @@ x-device: &device
     LAB_SYSLOG_TARGETS: 172.31.10.31:5514,172.31.10.32:5514
     # linkDown/linkUp to the Telegraf inside agent A, which knows each device by its address.
     LAB_TRAP_TARGETS: ${LAB_TRAP_TARGETS:-172.31.10.31:1162}
-    # access-a1 has its own SNMPv3 trap user, so its own listener (the first further one, 1163).
-    LAB_TRAP_V3: &trap-v3 access-a1=lab-trap:SHA:lab-trap-auth:AES:lab-trap-priv@172.31.10.31:1163
+    # access-a1 has its own SNMPv3 trap user. The only v3 one, so it keeps the usual listener
+    # (1162, with the v2c traps); a second v3 user would get 1163.
+    LAB_TRAP_V3: &trap-v3 access-a1=lab-trap:SHA:lab-trap-auth:AES:lab-trap-priv@172.31.10.31:1162
     LAB_REPLAY_EVERY: "10"
   restart: unless-stopped
 

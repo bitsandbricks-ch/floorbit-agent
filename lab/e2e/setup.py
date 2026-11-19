@@ -173,8 +173,8 @@ def telemetry(fb, args):
 
 
 def trap_user(fb, spec, ids):
-    """One device's own SNMPv3 trap user (floorbit#975), as LAB_TRAP_V3 has it: Floorbit gives it
-    a listener of its own on the collecting agent."""
+    """One device's own SNMPv3 trap user (floorbit#975), as LAB_TRAP_V3 has it: Floorbit gives
+    it a listener on the collecting agent (the usual one while it is the only v3 trap user)."""
     device, _, rest = spec.partition('=')
     login, _, _dest = rest.rpartition('@')
     user, auth, auth_pass, priv, priv_pass = login.split(':')

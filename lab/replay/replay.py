@@ -15,7 +15,7 @@ Where things go (env, comma-separated host:port lists; empty: that stream is off
                        line, as switches with two logging hosts do: the hosted side keeps one)
   LAB_TRAP_TARGETS     SNMPv2c traps (linkDown/linkUp), e.g. telegraf:1162
   LAB_TRAP_V3          one device's own SNMPv3 trap user (floorbit#975), e.g.
-                       access-a1=lab-trap:SHA:auth-pass:AES:priv-pass@agent-a:1163: that device
+                       access-a1=lab-trap:SHA:auth-pass:AES:priv-pass@agent-a:1162: that device
                        also sends a v3 trap and a v2c one to that listener, each round
   LAB_FLOW_TARGETS     NetFlow v9, e.g. agent-a:2055
   LAB_LANCACHE_DIR     a folder to append logs/access.log and dns/query.log to
