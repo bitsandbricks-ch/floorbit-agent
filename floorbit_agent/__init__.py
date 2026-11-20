@@ -545,7 +545,10 @@ class Agent:
                     f'This agent\'s key is {self.identity.fingerprint()}. Reset the agent\'s identity on its page '
                     'in Floorbit, and it enrols this one.')
             if self.identity.wanted(block):
+                first = not block.get('pinned')
                 self.identity.enrol(self, block.get('path') or '/api/agent/v1/identity')
+                if first and self.plugins is not None:
+                    self.plugins.reload()       # its pull was refused until now: don't wait a minute
         self.gzip = 'gzip' in (body.get('encodings') or [])
         # A hosted Floorbit of protocol 1 says nothing of "protocols": stay on 1 and the long poll.
         known = {p for p in body.get('protocols') or [body.get('protocol') or 1] if isinstance(p, int)}
