@@ -6,6 +6,10 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Every request to Floorbit is signed with the agent's own key (bitsandbricks-ch/floorbit#1178): made on the agent (`tls/identity-key.pem`), enrolled at the first hello, where Floorbit's agents CA signs a client certificate and pins the key, and renewed 30 days before the end. The WebSocket link and the front door's requests are signed too. The agent signs with Floorbit's time (from its answers' `Date`), and a refused signature is retried, never fatal. Needs a Floorbit with bitsandbricks-ch/floorbit#1178.
+
 ### Added
 
 - Answers `device_facts` (Floorbit #966): what a device is (VLANs, networks, transceivers, ...) for discovery, from telemetry first and LibreNMS for the rest, so discovery works with LibreNMS alone.

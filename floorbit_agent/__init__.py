@@ -95,6 +95,21 @@ def _within(seconds, open_it, late=None):
     return out['value']
 
 
+IDENTITY_CODES = ('identity', 'enrol', 'clock', 'unsigned')
+
+
+class IdentityRefused(RuntimeError):
+    """Floorbit refused the request's signature (not the key): not fatal, the agent tries again."""
+
+
+def _refusal_code(resp):
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    return body.get('code') if isinstance(body, dict) else None
+
+
 def _error_of(resp):
     """The ``error`` of a JSON answer, or None when it is not JSON (a proxy's own page)."""
     try:
@@ -419,6 +434,15 @@ class Agent:
         self.metrics.collect(self._gauges)
         self.plugins = None       # plugin_host.PluginHost, once main() starts it
         self.on_connect = []      # called after each hello that got through (env_settings.Sender)
+        self.identity = None      # identity.Identity: the key that signs every request (use_identity)
+        self.signer = None        # its requests auth, for the session and the front door's
+
+    def use_identity(self, identity):
+        """Sign every request to Floorbit with this agent's own key (identity.py)."""
+        self.identity = identity
+        self.signer = identity.auth(lambda: self.key)
+        if hasattr(self.http, 'auth'):
+            self.http.auth = self.signer
 
     @property
     def lan_url(self):
@@ -478,6 +502,10 @@ class Agent:
         return h
 
     def _check(self, resp):
+        if resp.status_code == 401 and _refusal_code(resp) in IDENTITY_CODES:
+            # The signature, not the key: the clock is put right from this answer, an enrolment
+            # comes with the next hello, a key Floorbit doesn't know waits for an admin. Keep trying.
+            raise IdentityRefused(_error_of(resp) or 'Floorbit refused the agent\'s signature.')
         if resp.status_code == 401:
             raise Refused('The hosted Floorbit refused the agent key: it is wrong or was revoked. '
                           'Enrol the agent again.')
@@ -503,9 +531,21 @@ class Agent:
         self.last_contact = time.time()
         return body
 
-    def hello(self):
+    def hello(self, again=True):
         body = self._hosted('hello', lambda: self.http.get(f'{self.url}/api/agent/v1/hello',
                                                           headers=self._headers(), timeout=HTTP_TIMEOUT))
+        block = body.get('identity')
+        if self.identity is not None and isinstance(block, dict):
+            if block.get('pinned') and not block.get('signed'):
+                if again:
+                    # Most likely the clock: hello's Date put it right, so sign again.
+                    return self.hello(again=False)
+                raise IdentityRefused(
+                    'Floorbit has another key pinned for this agent (a new machine, or a lost state folder?). '
+                    f'This agent\'s key is {self.identity.fingerprint()}. Reset the agent\'s identity on its page '
+                    'in Floorbit, and it enrols this one.')
+            if self.identity.wanted(block):
+                self.identity.enrol(self, block.get('path') or '/api/agent/v1/identity')
         self.gzip = 'gzip' in (body.get('encodings') or [])
         # A hosted Floorbit of protocol 1 says nothing of "protocols": stay on 1 and the long poll.
         known = {p for p in body.get('protocols') or [body.get('protocol') or 1] if isinstance(p, int)}
@@ -521,7 +561,7 @@ class Agent:
         url = 'ws' + self.url[len('http'):] + self.link_path     # https:// -> wss://
         try:
             ws = _within(LINK_CONNECT, lambda: simple_websocket.Client.connect(
-                url, headers=self._headers(), ping_interval=25, max_message_size=32 * 1024 * 1024),
+                url, headers=self._link_headers(url), ping_interval=25, max_message_size=32 * 1024 * 1024),
                 late=lambda late_ws: late_ws.close())
         except simple_websocket.ConnectionError as exc:
             if getattr(exc, 'status_code', None) in (401, 426):
@@ -551,6 +591,13 @@ class Agent:
             self._ws, self.link_up = None, False
             with contextlib.suppress(Exception):
                 ws.close()
+
+    def _link_headers(self, url):
+        headers = self._headers()
+        if self.identity is not None:
+            from .identity import HEADER, agent_id_of
+            headers[HEADER] = self.identity.sign('GET', url, b'', agent_id_of(self.key))
+        return headers
 
     def _link_send(self, message):
         ws = self._ws
@@ -1011,6 +1058,8 @@ def main(argv=None):
     agent = Agent(url, key, local_executor(app, plugins_ref), version=version)
     agent.key_source = key_source
     agent.hosted = hosted
+    from .identity import Identity
+    agent.use_identity(Identity(state_root(), log=logs.say))
     agent.heartbeat = heartbeat_file()
     agent.on_connect.append(handover.send)
     host = plugins_ref['host'] = start_plugins(agent, app)

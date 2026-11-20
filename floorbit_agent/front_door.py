@@ -67,11 +67,15 @@ def _ip(text):
 
 
 class FrontDoor:
-    def __init__(self, url, key, http=None, proxies=(), log=logs.say):
+    def __init__(self, url, key, http=None, proxies=(), log=logs.say, auth=None):
         import requests
         self.url = url.rstrip('/')
         self.key = key
         self.http = http or requests.Session()
+        if auth is not None:
+            # Floorbit takes the attendee's address from this request only when the agent signed it
+            # (identity.py): the key alone could be copied.
+            self.http.auth = auth
         self.proxies = {p for p in (_ip(x) for x in proxies) if p}
         self.log = log
         self.open = 0

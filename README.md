@@ -82,6 +82,14 @@ state folder (`agent-key`, readable only by the agent). From then on it wins ove
 `FLOORBIT_AGENT_KEY`, which only enrols. The old key works until the new one is used. When the
 stored key is refused (the agent was enrolled again), the agent sets it aside and uses the env's.
 
+**Its own key (identity).** The agent signs every request to Floorbit with a P-256 key it makes
+itself (`tls/identity-key.pem`, readable only by it; it never leaves the machine). At its first hello
+it enrols the key: Floorbit's agents CA signs a client certificate (`tls/identity.pem`, 90 days,
+renewed 30 days before the end) and Floorbit pins the key. From then on a copied bearer key alone
+gets nowhere. The agent takes Floorbit's time from its answers, so a box without NTP still signs in
+time. Keep the state folder: a new machine has a new key, and an admin resets the agent's identity
+on its page before Floorbit takes it (the agent's log says so and names its key).
+
 **Certificate.** With the names the agent is reached by listed on its page, the agent makes its own
 key (`tls/agent-key.pem`, it never leaves the machine), Floorbit's agents CA signs it, and the
 plugins' HTTPS listeners (the front door, the telemetry listener) serve with it. It asks again 30
