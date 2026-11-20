@@ -128,8 +128,9 @@ def test_the_crew_walk_through_finds_each_seat_port(fb, lab):
         assert got['ok'] and got['found'] == {'switch': seat.switch, 'port': short(seat.port)}, got
         assert got['ip'] == seat.ip and got['mac'] == seat.mac and got['how'] == 'monitoring'
         previous = got['found']
-    block = next(b['id'] for b in fb.get('/api/seat-blocks') if b['name'] == 'B')
-    kept = {s['seat']: s['port'] for s in fb.get(f'/api/seat-walk?block={block}')['seats']}
+    # A walker takes a row or a few, not a whole block: block B's rows.
+    rows = [o['value'] for o in fb.get('/api/options/rows')['options'] if o.get('group') == 'B']
+    kept = {s['seat']: s['port'] for s in fb.get(f"/api/seat-walk?rows={','.join(rows)}")['seats']}
     assert all(kept[s.label]['port'] == short(s.port) and kept[s.label]['source'] == 'walk' for s in seats)
     # The last seat's port again (as an old MAC table would say) is never taken for the next seat.
     stale = fb.post('/api/seat-walk/locate', {'seat': 'B-20', 'previous': previous,
