@@ -20,6 +20,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Takes the tenant's Let's Encrypt certificate from Floorbit (Floorbit #1026): with a domain set on the hosted Floorbit, the HTTPS listeners serve it to browsers that ask for `<tenant>.agent.<domain>`, and the CA's certificate to everyone else (by IP, by another name, no name, or once the Let's Encrypt one has expired). Its shared key comes encrypted to the agent's own key, which still never leaves the machine.
 - Answers `device_facts` (Floorbit #966): what a device is (VLANs, networks, transceivers, ...) for discovery, from telemetry first and LibreNMS for the rest, so discovery works with LibreNMS alone.
 - Drills in the test lab (`lab/e2e/test_drills.py`): a firewall and an access switch die and come back, LibreNMS goes away, the hosted Floorbit goes away and comes back; CI runs each. The lab plans a seat range per block on its firewalls.
 - The test lab's switches answer SSH as Cisco IOS and NX-OS (`lab/switch_ssh`), and the lab stores a switch login in Floorbit: the end-to-end tests run the switch command templates, a config backup, port shut, turn on and bounce, Clear port counters and the browser terminal through the agents. A shut port changes the switch's SNMP, syslog, traps and running config, as at the event.
