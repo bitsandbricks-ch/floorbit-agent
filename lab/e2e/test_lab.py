@@ -170,7 +170,9 @@ def test_syslog_from_every_switch_kind_arrives_once(fb, lab):
         kinds = ['%LINK-3-UPDOWN', '%ETHPORT-5-SPEED', 'filterlog' if 'filterlog' in str(lines) else None]
         return body if all(k is None or k in text or k in str(lines) for k in kinds) and lines else None
     body = eventually(arrived, timeout=120, what='syslog from the switches')
-    assert body['status']['counts']['duplicates'] > 0, 'both agents should have sent every line'
+    # Without Docker only agent A takes syslog (both can't have the port): nothing to keep once.
+    if int(os.environ.get('LAB_SYSLOG_AGENTS', '2')) > 1:
+        assert body['status']['counts']['duplicates'] > 0, 'both agents should have sent every line'
     seen = [(line.get('ts'), line.get('message')) for line in body['lines']]
     assert len(seen) == len(set(seen)), 'a line was kept twice'
 
