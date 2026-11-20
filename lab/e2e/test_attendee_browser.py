@@ -12,6 +12,7 @@ comma-separated (run-local.sh sets them), or the CI step greps ``docker compose 
 """
 import os
 import pathlib
+import re
 
 import pytest
 import requests
@@ -96,7 +97,7 @@ def test_a_seat_pc_checks_in_in_a_browser_and_the_note_goes(fb, lab, browser):
 
 
 def test_the_crew_walks_a_seat_from_the_walk_page(fb, lab, browser):
-    """The crew laptop opens the walk page through the agent, picks a block and walks a seat:
+    """The crew laptop opens the walk page through the agent, picks a row and walks a seat:
     no setting, no code to copy, no trip to another address."""
     ctx = browser.new_context(viewport={'width': 1280, 'height': 900}, device_scale_factor=2)
     page = ctx.new_page()
@@ -106,11 +107,12 @@ def test_the_crew_walks_a_seat_from_the_walk_page(fb, lab, browser):
     page.keyboard.press('Enter')
     page.wait_for_url(f'{DOOR}/seat-walk', timeout=30_000)
     # Not networkidle: the page keeps a live-updates stream open.
-    page.get_by_label('Seat block').first.wait_for(timeout=30_000)
+    page.get_by_label('Rows').first.wait_for(timeout=30_000)
     assert not page.get_by_text("doesn't know where laptops").count()
     assert not page.get_by_text('No laptop in the hall has reached a local agent yet').count()
-    page.get_by_label('Seat block').first.click()
-    page.get_by_role('option').filter(has_text='D (').first.click()
+    page.get_by_label('Rows').first.click()
+    page.get_by_role('option').filter(has_text=re.compile(r'^D\b')).first.click()     # block D's first row
+    page.keyboard.press('Escape')
     start = page.get_by_role('button', name='Start at')
     start.wait_for()
     label = start.inner_text().replace('Start at', '').strip()
@@ -121,12 +123,13 @@ def test_the_crew_walks_a_seat_from_the_walk_page(fb, lab, browser):
     page.set_extra_http_headers({'X-Forwarded-For': seat.ip})
     start.click()
     shot(page, 'walk-plug-in')
-    page.get_by_role('button', name='Locate').click()
+    # No button: the page looks the laptop up by itself once it is plugged in.
     page.get_by_text(f'{label} is on').wait_for(timeout=90_000)
     shot(page, 'walk-found')
     assert page.url.startswith(DOOR), page.url               # never left for another address
     ctx.close()
-    kept = fb.get('/api/seat-walk?block=' + next(b['id'] for b in fb.get('/api/seat-blocks') if b['name'] == 'D'))
+    rows = [o['value'] for o in fb.get('/api/options/rows')['options'] if o.get('group') == 'D']
+    kept = fb.get(f"/api/seat-walk?rows={','.join(rows)}")
     port = {s['seat']: s['port'] for s in kept['seats']}[label]
     assert port['port'] == short(seat.port) and port['source'] == 'walk'
     assert fb.s.delete(f'{fb.url}/api/seat-walk/{label}', timeout=30).status_code == 200
