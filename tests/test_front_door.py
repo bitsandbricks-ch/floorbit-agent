@@ -131,3 +131,101 @@ def test_too_many_at_once_get_busy(door, monkeypatch):
     _d, port = door(http)
     r, _ = ask(port, 'GET', '/checkin')
     assert r.status == 503 and http.calls == []
+
+
+# ── one port for attendees: the note and the hello answer here too ─────────────────────────────
+
+def test_the_note_and_the_hello_answer_on_the_front_door_and_the_rest_goes_on(monkeypatch):
+    from floorbit_agent import captive
+    monkeypatch.setattr(front_door, '_seen', {'url': '', 'at': 0.0})
+    http = FakeHttp()
+    api = captive.Captive(lambda: {'done': [], 'portal_url': 'https://floorbit.example.com/checkin'},
+                          log=lambda *_: None, say_hello=lambda code, ip: None,
+                          floorbit_url='https://floorbit.example.com')
+    api.refresh()
+    d = front_door.FrontDoor('https://floorbit.example.com', KEY, http=http, log=lambda *_: None)
+    server = front_door.serve(d, '127.0.0.1:0', captive=api, log=lambda *_: None)
+    try:
+        port = server.server_address[1]
+        r, data = ask(port, 'GET', captive.PATH, headers={'Host': 'checkin.lan'})
+        assert r.status == 200 and r.getheader('Content-Type') == captive.KIND
+        r, data = ask(port, 'GET', '/floorbit/hello/abcdefghijklmnop1234?back=https%3A%2F%2Ffloorbit.example.com%2Fx')
+        assert r.status == 303 and r.getheader('Location') == 'https://floorbit.example.com/x'
+        r, data = ask(port, 'GET', '/', headers={'Host': 'checkin.lan'})
+        assert r.status == 200 and data == b'hello'                      # / is the check-in page
+        assert [c['url'] for c in http.calls] == ['https://floorbit.example.com/']
+        assert front_door.seen_url() == ''                                 # 127.0.0.1 is not the hall
+    finally:
+        server.shutdown()
+
+
+def test_with_a_certificate_the_plain_port_sends_browsers_on_to_https():
+    from floorbit_agent import captive
+    api = captive.Captive(lambda: {'done': []}, log=lambda *_: None, note=False)
+    d = front_door.FrontDoor('https://floorbit.example.com', KEY, http=FakeHttp(), log=lambda *_: None)
+    server = front_door.serve(d, '127.0.0.1:0', captive=api, to_https=True, log=lambda *_: None)
+    try:
+        port = server.server_address[1]
+        r, _ = ask(port, 'GET', '/checkin?pin=1', headers={'Host': 'checkin.lan:80'})
+        assert r.status == 308 and r.getheader('Location') == 'https://checkin.lan/checkin?pin=1'
+        r, _ = ask(port, 'GET', captive.PATH, headers={'Host': 'checkin.lan'})
+        assert r.status == 308                                             # the note is off: on to HTTPS too
+    finally:
+        server.shutdown()
+
+
+def test_one_browsers_sign_in_cookie_is_never_sent_for_another(door):
+    """Every attendee goes through one HTTP session: a cookie the hosted side sets must go to that
+    browser only, or the crew's sign-in at the door would sign in everyone behind it."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Hosted(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            body = (self.headers.get('Cookie') or '-').encode()
+            self.send_response(200)
+            if self.path == '/login':
+                self.send_header('Set-Cookie', 'floorbit_session=crew; Path=/; HttpOnly')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    hosted = ThreadingHTTPServer(('127.0.0.1', 0), Hosted)
+    threading.Thread(target=hosted.serve_forever, daemon=True).start()
+    try:
+        d = front_door.FrontDoor(f'http://127.0.0.1:{hosted.server_address[1]}', KEY, log=lambda *_: None)
+        server = front_door.serve(d, '127.0.0.1:0')
+        try:
+            port = server.server_address[1]
+            r, _ = ask(port, 'GET', '/login')
+            assert 'floorbit_session=crew' in r.getheader('Set-Cookie')      # the crew's browser gets it
+            _, seen = ask(port, 'GET', '/me')                                 # another browser, no cookie
+            assert seen == b'-'
+            _, seen = ask(port, 'GET', '/me', headers={'Cookie': 'floorbit_session=crew'})
+            assert seen == b'floorbit_session=crew'                           # its own cookie still goes on
+        finally:
+            server.shutdown()
+    finally:
+        hosted.shutdown()
+
+
+@pytest.mark.parametrize('status', [304, 204])
+def test_an_answer_without_a_body_leaves_the_connection_clean(door, status):
+    """A 304 for a cached file has no body: an empty chunk after it would be read as the start of the
+    next answer on the same connection, and the browser drops that file."""
+    http = FakeHttp(FakeResp(status, {'ETag': '"abc"'}, b''))
+    _, port = door(http)
+    c = http_client_keepalive(port)
+    for _ in range(2):
+        c.request('GET', '/static/app/x.js', headers={'If-None-Match': '"abc"'})
+        r = c.getresponse()
+        assert r.status == status and r.read() == b''
+        assert r.getheader('Transfer-Encoding') is None
+    c.close()
+
+
+def http_client_keepalive(port):
+    return http.client.HTTPConnection('127.0.0.1', port, timeout=5)

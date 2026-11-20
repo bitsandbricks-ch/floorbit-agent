@@ -20,9 +20,6 @@ OLD_RELAYS = {
     'FLOORBIT_AGENT_SYSLOG_BIND': 'plugin.syslog-relay.bind',
     'FLOORBIT_AGENT_FLOWS_PORT': 'plugin.netflow-relay.port',
     'FLOORBIT_AGENT_FLOWS_BIND': 'plugin.netflow-relay.bind',
-    'FLOORBIT_AGENT_CAPTIVE': 'plugin.captive-note.address',
-    'FLOORBIT_AGENT_CAPTIVE_PORTAL_URL': 'plugin.captive-note.portal_url',
-    'FLOORBIT_AGENT_CAPTIVE_PROXIES': 'plugin.captive-note.proxies',
     'FLOORBIT_AGENT_FRONT_DOOR': 'plugin.front-door.address',
     'FLOORBIT_AGENT_FRONT_DOOR_PROXIES': 'plugin.front-door.proxies',
 }

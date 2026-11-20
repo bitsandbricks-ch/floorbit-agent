@@ -422,8 +422,9 @@ class Agent:
 
     @property
     def lan_url(self):
-        # Read each time: Floorbit can set it on the agent's page (hosted.py), and the env wins.
-        return os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
+        # Learnt, not set: where browsers in the hall last reached the front door (front_door.py).
+        from . import front_door
+        return front_door.seen_url()
 
     def take_hosted(self, block):
         """The ``agent`` block of the plugin config: settings, a key to fetch, the certificate's
