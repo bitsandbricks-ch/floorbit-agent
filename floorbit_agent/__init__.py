@@ -422,8 +422,9 @@ class Agent:
 
     @property
     def lan_url(self):
-        # Read each time: Floorbit can set it on the agent's page (hosted.py), and the env wins.
-        return os.environ.get('FLOORBIT_AGENT_LAN_URL', '').strip().rstrip('/')
+        # Learnt, not set: where browsers in the hall last reached the front door (front_door.py).
+        from . import front_door
+        return front_door.seen_url()
 
     def take_hosted(self, block):
         """The ``agent`` block of the plugin config: settings, a key to fetch, the certificate's
@@ -439,7 +440,15 @@ class Agent:
             except Exception as exc:  # noqa: BLE001
                 self.log(f'[agent] could not fetch the new key: {type(exc).__name__}: {exc}')
         try:
-            if h.cert.wanted(block.get('cert')) and h.cert.fetch(self, block['cert']) and self.plugins is not None:
+            # Both pairs: the CA's for the agent's address and names, the tenant's Let's Encrypt one
+            # for its public name; the listeners pick per connection (hosted.server_context).
+            changed = bool(h.cert.wanted(block.get('cert')) and h.cert.fetch(self, block['cert']))
+            public = block.get('public_cert')
+            if public:
+                changed = bool(h.cert.public_wanted(public) and h.cert.fetch_public(self, public)) or changed
+            else:
+                changed = h.cert.drop_public() or changed
+            if changed and self.plugins is not None:
                 self.plugins.restart_tls()
         except Exception as exc:  # noqa: BLE001
             h.cert.failed_at = time.time()

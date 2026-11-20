@@ -41,7 +41,7 @@ x-agent: &agent
     FLOORBIT_URL: http://172.31.10.2:5000
     # Plain HTTP inside the lab network only; at an event it is always https://.
     FLOORBIT_AGENT_INSECURE: "1"
-    # LibreNMS, syslog, NetFlow, the check-in note and the front door are set up in Floorbit by the
+    # LibreNMS, syslog and NetFlow are set up in Floorbit by the
     # setup step.
   volumes:
     - keys:/keys:ro
@@ -74,8 +74,11 @@ services:
       CHECKIN_ENABLED: "true"
       # The tests check in as players: they say which seat IP they are with X-Forwarded-For.
       CHECKIN_TRUST_PROXY: "true"
+      # What attendees type: agent A's front door (at an event, a name like checkin.lan pointing at
+      # the agent). Its "/" is then the check-in page instead of the crew's sign-in.
+      # Port 8080: the front door inside the container; an event publishes it as 80.
+      CHECKIN_ADDRESS: "172.31.10.31:8080"
       # The agents' "sign in to network" note (Captive Portal API).
-      CAPTIVE_ENABLED: "true"
       # A device down or back shows after two polls in a row: every 15 s here (60 s by default), so
       # the drills don't wait minutes.
       STATUS_MONITOR_INTERVAL: "15"
@@ -168,7 +171,7 @@ services:
   agent-a:
     <<: *agent
     # Telegraf runs inside the agent (the image carries it): no sidecar.
-    environment: {<<: *agent-env, LAB_AGENT: agent-a, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.31:8908"}
+    environment: {<<: *agent-env, LAB_AGENT: agent-a}
     volumes:
       - keys:/keys:ro
       - lancache:/lancache:ro
@@ -176,7 +179,7 @@ services:
     networks: {lab: {ipv4_address: 172.31.10.31}}
   agent-b:
     <<: *agent
-    environment: {<<: *agent-env, LAB_AGENT: agent-b, FLOORBIT_AGENT_LAN_URL: "http://172.31.10.32:8908"}
+    environment: {<<: *agent-env, LAB_AGENT: agent-b}
     networks: {lab: {ipv4_address: 172.31.10.32}}
 
   e2e:
@@ -187,8 +190,8 @@ services:
       LAB_FLOORBIT_URL: http://172.31.10.2:5000
       LAB_ADMIN_PASSWORD: lab-admin-password
       LAB_AGENT_METRICS: agent-a=http://172.31.10.31:9520,agent-b=http://172.31.10.32:9520
-      LAB_CAPTIVE: http://172.31.10.31:8908
-      LAB_FRONT_DOOR: http://172.31.10.31:8443
+      # One port for attendees: the note, the seat walk and check-in (the front door's defaults).
+      LAB_FRONT_DOOR: http://172.31.10.31:8080
       LAB_TRAP_V3: *trap-v3
     networks: {lab: {ipv4_address: 172.31.10.60}}
 

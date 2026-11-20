@@ -109,6 +109,31 @@ jobs:
         env:
           LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
         run: docker compose -f lab/compose.yml run --rm e2e
+      # Attendees and the crew in a real browser, from the runner: on the lab network it is
+      # 172.31.10.1, a trusted proxy of the front door (setup.py), so it can stand in for any seat.
+      - name: Browser tests (check-in, the note on phones, the seat walk)
+        env:
+          LAB_FLOORBIT_URL: http://172.31.10.2:5000
+          LAB_FRONT_DOOR: http://172.31.10.31:8080
+          LAB_SHOTS: ${{ runner.temp }}/lab-shots
+        run: |
+          python3 -m venv "$RUNNER_TEMP/browser"
+          "$RUNNER_TEMP/browser/bin/pip" install -q "playwright==1.55.0" "pytest==8.4.2" "requests==2.32.5"
+          "$RUNNER_TEMP/browser/bin/python" -m playwright install --with-deps chromium
+          "$RUNNER_TEMP/browser/bin/python" -m pytest -q -p no:cacheprovider -rs lab/e2e/test_attendee_browser.py
+      - name: No stack traces in the agents' logs
+        run: |
+          if docker compose -f lab/compose.yml logs --no-color agent-a agent-b | grep -B5 -A20 Traceback; then
+            echo "::error::An agent logged a stack trace (above)."
+            exit 1
+          fi
+      - name: Browser screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lab-browser-screenshots
+          path: ${{ runner.temp }}/lab-shots
+          if-no-files-found: ignore
       # Bad days (docs/lab/README.md, "Drills"): each part goes away, the crew's view is checked,
       # and it comes back.
       - name: "Drill: a firewall and an access switch die, then come back"

@@ -80,15 +80,19 @@ def plugins(fb, args):
         'librenms.url': args.librenms_url, 'librenms.token': args.librenms_token,
         'plugin.syslog-relay.port': args.syslog_port,
         'plugin.netflow-relay.port': args.flows_port,
-        'plugin.captive-note.address': args.captive, 'plugin.captive-note.proxies': args.captive_proxies,
-        # Check-in learns the seat PC's address only through the front door.
-        'plugin.front-door.address': args.front_door, 'plugin.front-door.proxies': args.captive_proxies,
+        # The front door (check-in, the note on phones, the seat walk) is on by default with its own
+        # addresses, as on a fresh agent: only the tests' stand-in reverse proxy is named here.
+        'plugin.front-door.proxies': args.proxies,
     }
+    if args.front_door:
+        settings['plugin.front-door.address'] = args.front_door
+    if args.front_door_http:
+        settings['plugin.front-door.http_address'] = args.front_door_http
     status, body = fb.call('PATCH', '/api/settings', settings)
     if status != 200:
         raise SystemExit(f'Setting up the plugins failed: {status} {body}')
-    listeners = ['syslog-relay', 'netflow-relay', 'captive-note', 'front-door']
-    for pid in ['librenms', *listeners]:
+    listeners = ['syslog-relay', 'netflow-relay', 'front-door']
+    for pid in ['librenms', 'syslog-relay', 'netflow-relay']:     # the front door is on already
         status, body = fb.call('PUT', f'/api/settings/plugins/{pid}', {'enabled': True})
         if status != 200:
             raise SystemExit(f'Turning on {pid} failed: {status} {body}')
@@ -103,7 +107,7 @@ def plugins(fb, args):
             status, answer = fb.call('PATCH', f'/api/agents/{agent["id"]}', {'plugins_off': off})
             if status != 200:
                 raise SystemExit(f'Leaving plugins off on {agent["name"]} failed: {status} {answer}')
-    print('Set up the plugins: LibreNMS, syslog, NetFlow, the check-in note, the front door.')
+    print('Set up the plugins: LibreNMS, syslog, NetFlow (the front door is on by default).')
 
 
 def switch_logins(fb, args):
@@ -235,11 +239,11 @@ def main(argv=None):
     p.add_argument('--librenms-token', default='lab-librenms-token')
     p.add_argument('--syslog-port', type=int, default=5514)
     p.add_argument('--flows-port', type=int, default=2055)
-    p.add_argument('--captive', default='0.0.0.0:8908')
-    p.add_argument('--front-door', default='0.0.0.0:8443')
-    # The tests ask the note and the front door as a reverse proxy would, naming the player in
-    # X-Forwarded-For.
-    p.add_argument('--captive-proxies', default='172.31.10.60')
+    # Empty: the plugin's defaults (0.0.0.0:8443 and 0.0.0.0:8080), as on a fresh agent.
+    p.add_argument('--front-door', default='')
+    p.add_argument('--front-door-http', default='')
+    # The tests ask the front door as a reverse proxy would, naming the player in X-Forwarded-For.
+    p.add_argument('--proxies', default='172.31.10.60,172.31.10.1')   # the e2e container, the CI runner
     p.add_argument('--listeners-on', default='', help='the one agent that runs the listening plugins')
     # Without VRRP every agent counts as the collector (Floorbit's docs/telemetry.md): one collects.
     p.add_argument('--telemetry-on', default='', help='the one agent that collects telemetry')

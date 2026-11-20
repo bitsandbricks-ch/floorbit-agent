@@ -103,7 +103,8 @@ on and the SNMP v2c community `public`. What each device needs on top (`telemetr
 `telemetry.mdt.node`, `telemetry.snmp.vlans`) is what `telemetry()` in `lab/e2e/setup.py` sets.
 
 Without Docker (a laptop or a sandbox), every part as a process on 127.0.0.1; needs redis-server,
-net-snmp's tools, snmpsim, gunicorn and Floorbit's requirements:
+net-snmp's tools, snmpsim with pysmi (`pip install snmpsim==1.2.2 pysmi==2.0.0`, as in `lab/Dockerfile`:
+snmpsim imports pysmi without declaring it), gunicorn and Floorbit's requirements:
 
 ```sh
 FLOORBIT_SRC=../floorbit lab/run-local.sh start
@@ -146,7 +147,7 @@ more from the pulled images only.
 - a player checks in, and the seat learns its switch port and MAC; history and search by IP,
   MAC and nick;
 - syslog from every kind of device arrives once, though both agents send it;
-- the NetFlow summary, the captive portal note, the agents' metrics;
+- the NetFlow summary, the note on phones, the agents' metrics;
 - failover: with agent A stopped, lookups and syslog go on through agent B;
 - SSH to the switches through the agents, with the login stored in Floorbit's inventory
   ([`lab/e2e/test_switch_ssh.py`](../../lab/e2e/test_switch_ssh.py)): the show templates on IOS
@@ -155,7 +156,14 @@ more from the pulled images only.
   and the browser terminal with the pager;
 - telemetry: every device reports to agent A's collector; Telegraf's SNMP polls show a seat
   port's traffic, the shut port and the distribution's CPU; its MAC tables and the core's ARP feed
-  the IP and MAC history; a firewall's own Telegraf push lands on that firewall.
+  the IP and MAC history; a firewall's own Telegraf push lands on that firewall;
+- in a real browser ([`lab/e2e/test_attendee_browser.py`](../../lab/e2e/test_attendee_browser.py),
+  Playwright and Chromium; skipped without): a fresh agent answers attendees on one port with nothing
+  set by hand; a seat PC checks in through the front door and the note on phones goes away; the crew
+  signs in at the front door, picks a row on the seat walk and walks a seat without leaving the page;
+  and no agent logged a stack trace. CI runs it from the runner and keeps the screenshots
+  (`lab-browser-screenshots`). Locally: `pip install playwright`, `playwright install chromium`, then
+  `LAB_SHOTS=/tmp/shots lab/run-local.sh test lab/e2e/test_attendee_browser.py`.
 
 The LAN cache numbers are skipped until Floorbit has them (bitsandbricks-ch/floorbit#660).
 
@@ -192,6 +200,9 @@ model-driven telemetry by node name on the core, the firewalls' own push. Only a
 (without VRRP both agents would count as the collector), and the Telegraf inside agent A's image
 runs the config it writes, as at an event; the devices send their traps to agent A. The core's replay also streams gNMI and Cisco MDT counters for its ports, and the
 firewalls push CPU, memory and pf states, both to agent A's port 8186 with its ingest token.
+Telemetry's "Who polls the switches" stays on Auto, as at an event with LibreNMS: LibreNMS polls the
+ports and tables, Telemetry keeps traps, facts and streams. The Telegraf polling tests switch it to
+Telemetry while they run, so both paths are tested.
 
 `lab/run-local.sh` hands the agents the Telegraf on the PATH (or `TELEGRAF=/path/to/telegraf`) to run
 themselves; without it the tests that need it skip. Traps stay off locally: every device is 127.0.0.1 there, so

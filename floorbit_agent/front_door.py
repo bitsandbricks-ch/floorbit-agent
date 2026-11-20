@@ -18,19 +18,28 @@ The speed test's data (``/help/<seat>/speed/ping``, ``down``, ``up``) is answere
 measures the hall's network up to the agent, which is what "is it the network?" asks. The result
 the page posts afterwards goes to the hosted side as usual.
 
+The same port answers the check-in note on phones (``/.well-known/captive-portal``) and the crew's
+seat walk-through (``/floorbit/hello/<code>``), both from captive.py, so attendees and the crew only
+ever need one address. With a certificate, a second plain-HTTP listener sends browsers on to HTTPS.
+
+The front door remembers the address it was last reached at from the hall (``seen_url``): Floorbit
+sends the crew's seat walk-through there when nobody named the check-in address, so no one has to
+tell the agent where it is.
+
 Point the event DNS name of the check-in page (``CHECKIN_ADDRESS``, for example ``checkin.lan``) at
 the agent. With ``FLOORBIT_AGENT_TLS_CERT`` and ``FLOORBIT_AGENT_TLS_KEY`` it serves HTTPS; crew
 sign-in needs that, because session cookies are only sent over HTTPS.
 """
+import http.cookiejar
 import ipaddress
 import json
 import re
-import ssl
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import time
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import unquote, urlsplit
 
-from . import logs
+from . import http_limits, logs
 
 DOOR_HEADER = 'Floorbit-Front-Door'
 CLIENT_HEADER = 'Floorbit-Client-IP'
@@ -41,12 +50,16 @@ HOP = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 
 SPOOFABLE = {'x-forwarded-for', 'x-real-ip', 'forwarded', DOOR_HEADER.lower(), CLIENT_HEADER.lower(),
              HOST_HEADER.lower()}
 MAX_BODY = 32 * 1024 * 1024        # what the hosted Floorbit takes in one request, about
+NO_BODY = (204, 304)
 TIMEOUT = 60                       # seconds to wait for the hosted side to start answering
 STREAM_TIMEOUT = 330               # a live-update stream or a long poll may be quiet this long
 CHUNK = 64 * 1024
 MAX_OPEN = 200                     # requests passed on at once; more get 503 at once
 SPEED_RE = re.compile(r'^/help/([^/]{1,40})/speed/(ping|down|up)\Z')
 BLOCKED = ('/api/agent/',)
+IDLE = 30                          # seconds a kept-alive browser connection may say nothing
+HOST_RE = re.compile(r'^[A-Za-z0-9.-]{1,120}(:[0-9]{1,5})?$|^\[[0-9A-Fa-f:.]{2,60}\](:[0-9]{1,5})?$')
+_seen = {'url': '', 'at': 0.0}
 # While the hosted side can't be reached: attendees see this, in both languages Floorbit speaks.
 AWAY_PAGE = b'''<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30">
@@ -59,11 +72,38 @@ It tries again by itself every 30 seconds.</p>
 Seite muss warten. Sie versucht es alle 30 Sekunden von selbst wieder.</p></main></body></html>'''
 
 
+def seen_url():
+    """Where browsers in the hall last reached this agent (``http://checkin.lan``), or ''."""
+    return _seen['url']
+
+
+def _saw(host, https, ip):
+    """Remember the Host a client in the hall used: only from private addresses, so a request
+    passed on from somewhere else can't point the walk-through elsewhere."""
+    host = str(host or '').strip().lower()
+    try:
+        addr = ipaddress.ip_address(ip)
+        private = addr.is_private and not addr.is_loopback
+    except ValueError:
+        private = False
+    if not private or not HOST_RE.match(host) or host.split(':')[0] in ('localhost', '127.0.0.1', '[::1]'):
+        return
+    _seen.update(url=f"{'https' if https else 'http'}://{host}", at=time.time())
+
+
 def _ip(text):
     try:
         return str(ipaddress.ip_address(str(text or '').strip().split('%')[0]))
     except ValueError:
         return ''
+
+
+class _NoCookies(http.cookiejar.DefaultCookiePolicy):
+    def set_ok(self, cookie, request):
+        return False
+
+    def return_ok(self, cookie, request):
+        return False
 
 
 class FrontDoor:
@@ -72,6 +112,11 @@ class FrontDoor:
         self.url = url.rstrip('/')
         self.key = key
         self.http = http or requests.Session()
+        # Many browsers share this one session: a cookie the hosted side sets belongs to the browser
+        # it answered, never to the session, or one crew sign-in would sign in everyone behind the door.
+        jar = getattr(self.http, 'cookies', None)
+        if jar is not None:
+            jar.set_policy(_NoCookies())
         self.proxies = {p for p in (_ip(x) for x in proxies) if p}
         self.log = log
         self.open = 0
@@ -153,11 +198,14 @@ def _speed(handler, ip, seat, kind, method):
     return handler.reply(405, b'', 'text/plain')
 
 
-def handler_for(door):
+def handler_for(door, captive=None, to_https=False):
+    """``captive``: a captive.Captive for the note and the hello. ``to_https``: this is the plain
+    listener next to an HTTPS one, so browsers are sent on there."""
     class Handler(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
         server_version = 'Floorbit-Agent'
         sys_version = ''
+        timeout = IDLE
 
         def log_message(self, *args):   # attendees' requests aren't the agent log's business
             pass
@@ -176,12 +224,34 @@ def handler_for(door):
             if body:
                 self.wfile.write(body)
 
+        def answer(self, status, headers, body, kind):
+            self.send_response(status)
+            self.send_header('Content-Type', kind)
+            self.send_header('Content-Length', str(len(body)))
+            for k, v in headers.items():
+                self.send_header(k, v)
+            if 'Cache-Control' not in headers:
+                self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            if body and self.command != 'HEAD':
+                self.wfile.write(body)
+
         def handle_any(self):
             path = urlsplit(self.path).path
             if not self.path.startswith('/') or path.startswith(BLOCKED):
                 door.count('refused')
                 return self.reply(404, b'Not found', 'text/plain')
             ip = door.client_ip(self.client_address[0], self.headers.get('X-Forwarded-For', ''))
+            _saw(self.headers.get('Host'), getattr(self.server, 'tls', False), ip)
+            if captive is not None and self.command in ('GET', 'HEAD'):
+                answer = captive.route(path, urlsplit(self.path).query, self.client_address[0],
+                                       self.headers.get('X-Forwarded-For', ''))
+                if answer is not None:
+                    return self.answer(*answer)
+            if to_https:
+                host = str(self.headers.get('Host') or '').split(':')[0]
+                if HOST_RE.match(host):
+                    return self.answer(308, {'Location': f'https://{host}{self.path}'}, b'', 'text/plain')
             speed = SPEED_RE.match(path)
             if speed:
                 door.count('speed')
@@ -215,8 +285,11 @@ def handler_for(door):
                     if k.lower() in HOP or k.lower() in ('content-encoding', 'server', 'date'):
                         continue
                     self.send_header(k, door.location(v) if k.lower() == 'location' else v)
-                if self.command == 'HEAD':
-                    self.send_header('Content-Length', '0')
+                if self.command == 'HEAD' or resp.status_code in NO_BODY or resp.status_code < 200:
+                    # No body at all, not even an empty chunked one: a browser would read those bytes
+                    # as the start of the next answer on this connection and drop it.
+                    if self.command == 'HEAD':
+                        self.send_header('Content-Length', '0')
                     self.end_headers()
                     return
                 self.send_header('Transfer-Encoding', 'chunked')
@@ -240,19 +313,16 @@ def tls_context(env):
     cert, key = env.get('FLOORBIT_AGENT_TLS_CERT', '').strip(), env.get('FLOORBIT_AGENT_TLS_KEY', '').strip()
     if not cert or not key:
         return None
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(cert, key)
-    return context
+    from .hosted import server_context
+    return server_context(env)
 
 
-def serve(door, address, context=None):
+def serve(door, address, context=None, captive=None, log=logs.say, to_https=False):
     """Start answering in a thread; returns the server. Raises ValueError or OSError when the address
     is wrong or taken."""
     host, _, port = address.strip().rpartition(':')
-    server = ThreadingHTTPServer((host or '0.0.0.0', int(port)), handler_for(door))
-    server.daemon_threads = True
-    if context is not None:
-        server.socket = context.wrap_socket(server.socket, server_side=True)
-    threading.Thread(target=server.serve_forever, name='front-door', daemon=True).start()
+    server = http_limits.LimitedHTTPServer((host or '0.0.0.0', int(port)), handler_for(door, captive, to_https),
+                                           total=http_limits.TOTAL * 4, shared=door.proxies, name='front-door',
+                                           log=log, context=context)
+    threading.Thread(target=server.serve_forever, name=f'front-door-{server.port}', daemon=True).start()
     return server

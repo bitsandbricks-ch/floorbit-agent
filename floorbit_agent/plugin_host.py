@@ -25,9 +25,9 @@ import ssl
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
-from . import logs
+from . import http_limits, logs
 
 PULL_EVERY = 60
 # The hosted side's word in a split brain (docs/vrrp.md) counts this long after it was last heard;
@@ -401,11 +401,9 @@ class AgentContext:
             def log_message(self, *args):
                 pass
 
-        server = ThreadingHTTPServer((host, int(port)), Handler)
-        server.daemon_threads = True
-        if context is not None:
-            # The handshake happens in the request's thread, so a slow client can't hold the listener.
-            server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+        # Capped like every listener in the hall, and quiet about browsers that hang up.
+        server = http_limits.LimitedHTTPServer((host, int(port)), Handler, per_client=64, name=self.id,
+                                               log=self.host.log, context=context)
         self.tls = context is not None
         self.on_stop(server.shutdown)
         self.on_stop(server.server_close)
@@ -418,14 +416,12 @@ class AgentContext:
         if not cert or not key:
             self.log('no FLOORBIT_AGENT_TLS_CERT/KEY: listening on plain HTTP, keep it on the event network')
             return None
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        from .hosted import server_context
         try:
-            context.load_cert_chain(cert, key)
+            return server_context(env)
         except (OSError, ssl.SSLError) as exc:
             from floorbit.plugins.base import PluginError
             raise PluginError(f'cannot use the TLS certificate {cert}: {exc}') from exc
-        return context
 
     def close(self):
         self.stopping.set()

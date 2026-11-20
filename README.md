@@ -41,9 +41,10 @@ curl -s http://127.0.0.1:9520/healthz     # {"ok": true, ...} once it reached th
 That's one container. Telegraf, which collects device telemetry (SNMP, traps, gNMI, Cisco MDT),
 is in the image and runs inside the agent when the **Telemetry** plugin is on: there's no
 second container to start. `compose.yml` publishes what is needed by default (9520 on this machine
-only, 162/udp for traps (1163-1170/udp for further SNMPv3 trap users) and 57000 for MDT); the ports of the plugins that listen in the hall
-(syslog 514/udp, NetFlow 2055/udp, a firewall's own Telegraf on 8186, the check-in note on 8908, the
-front door on 8443) are commented out until you use them. Every port, and how to check that each
+only, 162/udp for traps (1163-1170/udp for further SNMPv3 trap users), 57000 for MDT, and 443 and 80
+for attendees: check-in, the check-in note on phones and the crew's seat walk-through, all on one
+listener); the ports of the plugins that listen for devices in the hall (syslog 514/udp, NetFlow
+2055/udp, a firewall's own Telegraf on 8186) are commented out until you use them. Every port, and how to check that each
 one works: Floorbit's [docs/agent.md, "Ports"](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md#ports).
 
 **Updating from a compose file with a `telegraf` service:** delete that service, take the new
@@ -87,6 +88,14 @@ key (`tls/agent-key.pem`, it never leaves the machine), Floorbit's agents CA sig
 plugins' HTTPS listeners (the front door, the telemetry listener) serve with it. It asks again 30
 days before the end. Install the CA (*Download CA* on the Local agents page) on crew devices once.
 `FLOORBIT_AGENT_TLS_CERT` and `_KEY` set by the hall win.
+
+**Let's Encrypt.** When the hosted Floorbit has a domain for its agents, it sends the tenant's
+Let's Encrypt certificate for `<tenant>.agent.<domain>` as well, so laptops trust the front door
+without a CA. The listeners keep both and pick per connection by the name the browser asks for: the
+Let's Encrypt one for its own name while it is valid, the CA's for the agent's address, its other
+names and browsers that send no name. All the tenant's agents share the Let's Encrypt key: Floorbit
+sends it encrypted to the agent's own key (ECDH P-256, HKDF-SHA256, AES-256-GCM), and the agent keeps
+it in `tls/public-key.pem` (0600). Point the name at the agent in the hall's DNS.
 
 ## Settings from an older agent
 
@@ -170,23 +179,27 @@ Agents can share virtual IPs with VRRP, so the event network keeps reaching one 
 down: keepalived in the image (`compose.vrrp.yml`), on the machine, or kube-vip/MetalLB on k3s.
 See [docs/vrrp.md](docs/vrrp.md).
 
-## The check-in note (Captive Portal API)
+## Attendees: one port for check-in, the note on phones and the seat walk
 
-With the plugin **Check-in note on phones** turned on for it in Floorbit (address
-`0.0.0.0:8908`), the agent answers `/.well-known/captive-portal`
-(RFC 8908). Point DHCP option 114 at it, through the event's HTTPS reverse proxy, and phones and
-laptops show a quiet "sign in to network" note until their seat has checked in. Nothing is ever
-blocked. See Floorbit's
-[docs/integrations.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/integrations.md#the-sign-in-to-network-note-captive-portal-api).
-With VRRP, point option 114 at a virtual IP, so the note keeps working when one agent is down.
+The plugin **Front door for attendees** is on by default, and `compose.yml` publishes it on 443 and
+80. Point the event DNS name of check-in (for example `checkin.lan`) at this machine, and that one
+address serves:
 
-The same port answers the crew's seat walk-through (Floorbit's
-[docs/seat-walk.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/seat-walk.md)): a
-hosted Floorbit, or one behind NAT, only sees the hall's public address, so the page sends the crew
-laptop once to `/floorbit/hello/<code>` here. The agent reports the laptop's own IP with that one-time
-code and sends the browser back, only ever to the Floorbit in `FLOORBIT_URL`. Set
-`FLOORBIT_AGENT_LAN_URL` to the address laptops in the hall use for this port (for example
-`http://192.0.2.10:8908`), and the page finds it.
+- `/`: Floorbit's check-in page, passed on with the PC's own address, so check-in finds its switch port;
+- `/.well-known/captive-portal`: the check-in note (RFC 8908). Point DHCP option 114 at
+  `https://checkin.lan/.well-known/captive-portal`, and phones and laptops show a quiet "sign in to
+  network" note until their seat has checked in. Nothing is ever blocked. See Floorbit's
+  [docs/integrations.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/integrations.md#the-sign-in-to-network-note-captive-portal-api).
+  With VRRP, point it at a virtual IP, so the note keeps working when one agent is down;
+- `/floorbit/hello/<code>`: the crew's seat walk-through (Floorbit's
+  [docs/seat-walk.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/seat-walk.md)).
+  The agent reports the laptop's own IP with that one-time code and sends the browser back, only
+  ever to the Floorbit in `FLOORBIT_URL`. Nothing to set: Floorbit sends the laptop to the check-in
+  name, or to the address browsers last reached this agent at, which the agent learns by itself.
+
+HTTPS needs a certificate (`FLOORBIT_AGENT_TLS_CERT` and `_KEY`, or one from Floorbit's agents CA);
+until then both ports answer plain HTTP, and with one, port 80 sends browsers on to HTTPS. A browser
+that uses the wrong one gets a line in the log that says so, not a stack trace.
 
 ## Security
 

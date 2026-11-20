@@ -169,7 +169,9 @@ def test_syslog_from_every_switch_kind_arrives_once(fb, lab):
         kinds = ['%LINK-3-UPDOWN', '%ETHPORT-5-SPEED', 'filterlog' if 'filterlog' in str(lines) else None]
         return body if all(k is None or k in text or k in str(lines) for k in kinds) and lines else None
     body = eventually(arrived, timeout=120, what='syslog from the switches')
-    assert body['status']['counts']['duplicates'] > 0, 'both agents should have sent every line'
+    # Without Docker only agent A takes syslog (both can't have the port): nothing to keep once.
+    if int(os.environ.get('LAB_SYSLOG_AGENTS', '2')) > 1:
+        assert body['status']['counts']['duplicates'] > 0, 'both agents should have sent every line'
     seen = [(line.get('ts'), line.get('message')) for line in body['lines']]
     assert len(seen) == len(set(seen)), 'a line was kept twice'
 
@@ -185,9 +187,9 @@ def test_netflow_summary_counts_the_seats(fb, lab):
 
 
 def test_captive_portal_note_until_checked_in(fb, lab):
-    url = os.environ.get('LAB_CAPTIVE')
+    url = os.environ.get('LAB_FRONT_DOOR')
     if not url:
-        pytest.skip('LAB_CAPTIVE is not set')
+        pytest.skip('LAB_FRONT_DOOR is not set')
     done, waiting = lab.seat('A-7'), lab.seat('A-8')
 
     def ask(seat):
@@ -231,24 +233,18 @@ def test_every_device_reports_telemetry(fb, lab):
     eventually(all_up, timeout=180, what='telemetry from every device')
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture
 def telemetry_polls(fb):
-    """Telemetry polls the ports and walks the ARP and MAC tables. The lab runs LibreNMS, so by default
-    (Who polls the switches: auto, floorbit#945) it leaves those to LibreNMS and the tests above go
-    through LibreNMS; these switch to Telemetry so the agent's Telegraf polling is tested too.
-    Back to auto afterwards: the drills run in fresh processes against the same Floorbit."""
-    def polling(value):
-        r = fb.patch('/api/settings', {'plugin.telemetry.polling': value})
-        assert r.status_code == 200, f'setting who polls to {value}: {r.status_code} {r.text[:200]}'
-    polling('telemetry')
-    try:
-        yield
-    finally:
-        polling('auto')
+    """Telemetry polls the ports and tables itself. With LibreNMS on, it leaves that to LibreNMS
+    (floorbit #945), and the tests above check the LibreNMS path; these check Telemetry's."""
+    fb.patch('/api/settings', {'plugin.telemetry.polling': 'telemetry'})
+    yield
+    fb.patch('/api/settings', {'plugin.telemetry.polling': 'auto'})
 
 
 @pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
-def test_telegraf_polls_the_switches_through_the_agent(fb, lab, telemetry_polls):
+@pytest.mark.usefixtures('telemetry_polls')
+def test_telegraf_polls_the_switches_through_the_agent(fb, lab):
     """Telegraf polls the simulated Catalysts and Nexus over SNMP for the agent; the per-port numbers
     reach Floorbit's history: traffic on a seat port, the shut port down."""
     busy, shut = lab.seat('B-3'), lab.seat('D-12')
@@ -260,7 +256,8 @@ def test_telegraf_polls_the_switches_through_the_agent(fb, lab, telemetry_polls)
 
 
 @pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
-def test_telegraf_mac_tables_feed_the_ip_and_mac_history(fb, lab, telemetry_polls):
+@pytest.mark.usefixtures('telemetry_polls')
+def test_telegraf_mac_tables_feed_the_ip_and_mac_history(fb, lab):
     """Per-VLAN MAC tables (community@vlan) on the access switches and the core's ARP, polled by
     Telegraf: each seat's machine is on its own access port, never an uplink."""
     seat = lab.seat('A-7')

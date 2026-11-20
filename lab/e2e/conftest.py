@@ -2,7 +2,7 @@
 against fakes: a real Floorbit, real agents, the lab LibreNMS and the simulated switches.
 
 Settings (env): LAB_FLOORBIT_URL, LAB_ADMIN_PASSWORD, LAB_AGENT_METRICS ("name=url,..."),
-LAB_CAPTIVE (an agent's captive portal URL), LAB_FRONT_DOOR (an agent's front door),
+LAB_FRONT_DOOR (an agent's front door: check-in, the note on phones, the seat walk),
 LAB_AGENT_DOWN (the agent the failover run stopped).
 
 LAB_DRILL names the bad day the lab is in, and only that drill's tests run (test_drills.py, and
@@ -79,8 +79,10 @@ class Floorbit:
     def post(self, path, body=None, **kw):
         return self.s.post(f'{self.url}{path}', json=body, timeout=60, **kw)
 
-    def patch(self, path, body=None, **kw):
-        return self.s.patch(f'{self.url}{path}', json=body, timeout=60, **kw)
+    def patch(self, path, body, **kw):
+        r = self.s.patch(f'{self.url}{path}', json=body, timeout=60, headers={'Origin': self.url}, **kw)
+        r.raise_for_status()
+        return r.json()
 
 
 @pytest.fixture(scope='session')
