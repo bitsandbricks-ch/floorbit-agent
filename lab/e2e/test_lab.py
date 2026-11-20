@@ -299,6 +299,30 @@ def test_telegraf_takes_the_switches_traps(fb, lab):
         time.sleep(5)
 
 
+@pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0' or not os.environ.get('LAB_TRAP_V3'),
+                    reason='no Telegraf or no SNMPv3 trap user in this lab')
+def test_a_devices_own_snmpv3_trap_user_gets_its_listener(fb, lab):
+    """access-a1 sends traps as its own SNMPv3 user (floorbit#975). It is the lab's only v3 trap user,
+    so Floorbit gives it the usual listener (a further user would get the next one), and the agent's
+    Telegraf takes both its v3 trap and a v2c one sent to the same port. Each trap names a port no
+    poll reports, so each one adds a port to access-a1 that its twin access-b1 doesn't have."""
+    device, _, rest = os.environ['LAB_TRAP_V3'].partition('=')
+    port = int(rest.rpartition(':')[2])
+    ids = {d['name']: d['id'] for d in fb.get('/api/inventory')['devices']}
+    target = fb.get(f'/api/telemetry/devices/{ids[device]}')['target']
+    assert target['trap_port'] == port and target['trap_user'], target
+    twin = next(sw.name for sw in lab.access if sw.name != device)
+
+    def both_traps_in():
+        rows = fb.get('/api/telemetry/devices')['devices']
+        mine, theirs = (rows.get(device) or {}).get('ports'), (rows.get(twin) or {}).get('ports')
+        return mine and theirs and mine - theirs == 2
+    eventually(both_traps_in, timeout=180, every=5, what=f'the v3 and the v2c trap from {device} on port {port}')
+    trouble = [p for p in ((fb.get('/api/telemetry/devices')['devices'].get(device) or {}).get('problems') or [])
+               if p.get('driver') == 'traps']
+    assert not trouble, trouble
+
+
 def test_a_firewalls_own_telegraf_lands_on_the_firewall(fb, lab):
     """OPNsense's os-telegraf pushes with its full host name (fw-01.lab.example): the numbers belong
     to fw-01 as set up, and no second device appears."""

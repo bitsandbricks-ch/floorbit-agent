@@ -30,6 +30,8 @@ services:
       # telemetry (dial-out) from the devices. Another trap receiver on this machine already holds
       # 162 (LibreNMS's snmptrapd): set TRAP_PUBLISH_PORT and point the devices there.
       - "${TRAP_PUBLISH_PORT:-162}:1162/udp"
+      # A listener for each further SNMPv3 trap user (Floorbit shows each device its port).
+      - "1163-1170:1163-1170/udp"
       - "${MDT_PUBLISH_PORT:-57000}:57000"
     # Syslog from the hall (plugin port 5514) and Traffic from the hall (NetFlow, 2055):
     #   - "514:5514/udp"

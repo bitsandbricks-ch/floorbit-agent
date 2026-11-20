@@ -21,6 +21,9 @@ x-device: &device
     LAB_SYSLOG_TARGETS: 172.31.10.31:5514,172.31.10.32:5514
     # linkDown/linkUp to the Telegraf inside agent A, which knows each device by its address.
     LAB_TRAP_TARGETS: ${LAB_TRAP_TARGETS:-172.31.10.31:1162}
+    # access-a1 has its own SNMPv3 trap user. The only v3 one, so it keeps the usual listener
+    # (1162, with the v2c traps); a second v3 user would get 1163.
+    LAB_TRAP_V3: &trap-v3 access-a1=lab-trap:SHA:lab-trap-auth:AES:lab-trap-priv@172.31.10.31:1162
     LAB_REPLAY_EVERY: "10"
   restart: unless-stopped
 
@@ -92,7 +95,7 @@ services:
     # Telemetry on agent A only: without VRRP both agents would count as the collector.
     command: ["python", "/lab/e2e/setup.py", "--url", "http://172.31.10.2:5000", "--out", "/keys",
               "--telemetry-on", "agent-a", "agent-a", "agent-b"]
-    environment: {AUTH_ADMIN_USER: admin, AUTH_ADMIN_PASSWORD: lab-admin-password}
+    environment: {AUTH_ADMIN_USER: admin, AUTH_ADMIN_PASSWORD: lab-admin-password, LAB_TRAP_V3: *trap-v3}
     volumes: ["keys:/keys"]
     networks: {lab: {ipv4_address: 172.31.10.4}}
     depends_on: {floorbit: {condition: service_healthy}}
@@ -186,6 +189,7 @@ services:
       LAB_AGENT_METRICS: agent-a=http://172.31.10.31:9520,agent-b=http://172.31.10.32:9520
       LAB_CAPTIVE: http://172.31.10.31:8908
       LAB_FRONT_DOOR: http://172.31.10.31:8443
+      LAB_TRAP_V3: *trap-v3
     networks: {lab: {ipv4_address: 172.31.10.60}}
 
 networks:
