@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from topology import LAB, SEAT_VLAN, SEATS_PER_BLOCK
+from topology import LAB, SEAT_VLAN, SEATS_PER_BLOCK, WLC
 
 
 class Client:
@@ -167,7 +167,25 @@ def telemetry(fb, args):
         status, answer = fb.call('PATCH', f'/api/inventory/{ids[dev.name]}', body)
         if status != 200:
             raise SystemExit(f'Setting up telemetry for {dev.name} failed: {status} {answer}')
-    print(f'Set up telemetry for {len(LAB.devices)} devices.')
+    wireless(fb)
+    print(f'Set up telemetry for {len(LAB.devices)} devices and {WLC.name}.')
+
+
+def wireless(fb):
+    """The 9800-CL in the inventory as the crew would add it: its model says it is a wireless
+    controller, MDT is how it sends (the replay stands in for its dial-out)."""
+    _, inv = fb.call('GET', '/api/inventory')
+    found = next((d for d in inv.get('devices', []) if d['name'] == WLC.name), None)
+    if found is None:
+        status, found = fb.call('POST', '/api/inventory', {
+            'name': WLC.name, 'role': 'other', 'model': WLC.model, 'mgmt_ip': WLC.ip,
+            'notes': 'Lab wireless controller'})
+        if status != 201:
+            raise SystemExit(f'Adding {WLC.name} failed: {status} {found}')
+    status, answer = fb.call('PATCH', f"/api/inventory/{found['id']}", {
+        'platform': 'IOS-XE', 'properties': {'telemetry_drivers': 'mdt', 'telemetry_mdt_node': WLC.name}})
+    if status != 200:
+        raise SystemExit(f'Setting up telemetry for {WLC.name} failed: {status} {answer}')
 
 
 def seed(fb):

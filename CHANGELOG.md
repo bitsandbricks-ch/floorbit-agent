@@ -8,6 +8,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- The test lab has a Catalyst 9800-CL wireless controller: the replay streams its three access points over MDT (capwap-data, radio-oper-data, rrm-measurement) and the end-to-end test checks they reach the Wi-Fi view through the agent, counts only, with clients over time.
 - Answers `device_facts` (Floorbit #966): what a device is (VLANs, networks, transceivers, ...) for discovery, from telemetry first and LibreNMS for the rest, so discovery works with LibreNMS alone.
 - Drills in the test lab (`lab/e2e/test_drills.py`): a firewall and an access switch die and come back, LibreNMS goes away, the hosted Floorbit goes away and comes back; CI runs each. The lab plans a seat range per block on its firewalls.
 - The test lab's switches answer SSH as Cisco IOS and NX-OS (`lab/switch_ssh`), and the lab stores a switch login in Floorbit: the end-to-end tests run the switch command templates, a config backup, port shut, turn on and bounce, Clear port counters and the browser terminal through the agents. A shut port changes the switch's SNMP, syslog, traps and running config, as at the event.

@@ -216,3 +216,32 @@ class Lab:
 
 
 LAB = build()
+
+
+# A Catalyst 9800-CL wireless controller that streams its access points over MDT (Floorbit's
+# docs/telemetry.md, "Wireless controllers"). Not an SNMP device here: only its stream is replayed.
+# TODO(capture): the event's controller is probably a 9800-CL; its AP names and models are made up.
+@dataclass
+class AccessPoint:
+    name: str
+    mac: str
+    model: str
+    radios: list          # (slot, band enum, channel, width MHz, channel use %, clients)
+
+
+@dataclass
+class Controller:
+    name: str
+    ip: str
+    model: str
+    aps: list
+
+
+WLC = Controller('wlc-01', '172.31.10.30', 'C9800-CL-K9', [
+    AccessPoint('ap-hall-a', '02:1a:b0:a0:00:01', 'C9130AXI-E',
+                [(0, 'dot11-2-dot-4-ghz-band', 1, 20, 34, 6), (1, 'dot11-5-ghz-band', 36, 80, 52, 21)]),
+    AccessPoint('ap-hall-b', '02:1a:b0:a0:00:02', 'C9130AXI-E',
+                [(0, 'dot11-2-dot-4-ghz-band', 6, 20, 41, 9), (1, 'dot11-5-ghz-band', 52, 80, 77, 38)]),
+    AccessPoint('ap-crew', '02:1a:b0:a0:00:03', 'C9120AXI-E',
+                [(1, 'dot11-5-ghz-band', 149, 40, 12, 3)]),
+])

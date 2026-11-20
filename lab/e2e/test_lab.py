@@ -231,7 +231,17 @@ def test_every_device_reports_telemetry(fb, lab):
     eventually(all_up, timeout=180, what='telemetry from every device')
 
 
+@pytest.fixture
+def telemetry_polls(fb):
+    """Telemetry polls the ports and tables itself. With LibreNMS on, it leaves that to LibreNMS
+    (floorbit #945), and the tests above check the LibreNMS path; these check Telemetry's."""
+    fb.patch('/api/settings', {'plugin.telemetry.polling': 'telemetry'})
+    yield
+    fb.patch('/api/settings', {'plugin.telemetry.polling': 'auto'})
+
+
 @pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
+@pytest.mark.usefixtures('telemetry_polls')
 def test_telegraf_polls_the_switches_through_the_agent(fb, lab):
     """Telegraf polls the simulated Catalysts and Nexus over SNMP for the agent; the per-port numbers
     reach Floorbit's history: traffic on a seat port, the shut port down."""
@@ -244,6 +254,7 @@ def test_telegraf_polls_the_switches_through_the_agent(fb, lab):
 
 
 @pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0', reason='no Telegraf in this lab (run-local without one)')
+@pytest.mark.usefixtures('telemetry_polls')
 def test_telegraf_mac_tables_feed_the_ip_and_mac_history(fb, lab):
     """Per-VLAN MAC tables (community@vlan) on the access switches and the core's ARP, polled by
     Telegraf: each seat's machine is on its own access port, never an uplink."""
@@ -289,6 +300,29 @@ def test_a_firewalls_own_telegraf_lands_on_the_firewall(fb, lab):
     fw = lab.firewalls[0]
     eventually(lambda: _series(fb, fw.name, 'states'), timeout=180, what=f'pf states from {fw.name}')
     assert not _series(fb, f'{fw.name}.lab.example', 'up')
+
+
+def test_the_wireless_controllers_aps_reach_the_wifi_view(fb):
+    """The 9800-CL's MDT stream (the replay, through agent A's listener) puts its APs on the Wi-Fi
+    view through the agent, with channels, channel use and clients, and only counts: then clients
+    over time come from the history the agent sends."""
+    from topology import WLC
+
+    def aps():
+        body = fb.get('/api/wifi')
+        by = {a['name']: a for a in body['aps']}
+        return body if {ap.name for ap in WLC.aps} <= set(by) else None
+    body = eventually(aps, timeout=180, what=f'the APs of {WLC.name} on the Wi-Fi view')
+    by = {a['name']: a for a in body['aps']}
+    hall_b = by['ap-hall-b']
+    assert hall_b['status'] == 'up' and hall_b['model'] == 'C9130AXI-E' and hall_b['source'].startswith('Telemetry')
+    five = next(r for r in hall_b['radios'] if r['band'] == '5')
+    assert (five['channel'], five['width']) == (52, 80) and 77 <= five['utilization'] <= 81
+    assert not any(k in str(body['aps']) for k in ('wtp_mac', '02:1a:b0:a0')), 'no MACs on the Wi-Fi view'
+    assert body['history'] is True
+    history = eventually(lambda: (h := fb.get('/api/wifi/history', params={'hours': 1}))['points'] and h,
+                         timeout=180, what='clients over time from the agent')
+    assert history['controllers'] == [WLC.name] and history['points'][-1][1] >= 77
 
 
 # --- failover: run with LAB_AGENT_DOWN=agent-a after stopping it ------------------------------
