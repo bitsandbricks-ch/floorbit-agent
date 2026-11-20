@@ -127,7 +127,7 @@ start() {
 e2e() {
   command -v "${TELEGRAF:-telegraf}" > /dev/null || export LAB_TELEGRAF=0
   LAB_FLOORBIT_URL=http://127.0.0.1:5000 LAB_ADMIN_PASSWORD=lab-admin-password \
-    LAB_AGENT_METRICS=agent-a=http://127.0.0.1:9520 \
+    LAB_AGENT_METRICS=agent-a=http://127.0.0.1:9520 LAB_SYSLOG_AGENTS=1 \
     LAB_FRONT_DOOR=http://127.0.0.1:8080 LAB_AGENT_LOGS="$STATE/agent-a.log,$STATE/agent-b.log" LAB_SSH=${LAB_SSH:-0} \
     $PY -m pytest -q "$LAB/e2e" "$@"
 }
