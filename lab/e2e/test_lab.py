@@ -298,25 +298,26 @@ def test_telegraf_takes_the_switches_traps(fb, lab):
 
 @pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0' or not os.environ.get('LAB_TRAP_V3'),
                     reason='no Telegraf or no SNMPv3 trap user in this lab')
+@pytest.mark.usefixtures('telemetry_polls')
 def test_a_devices_own_snmpv3_trap_user_gets_its_listener(fb, lab):
     """access-a1 sends traps as its own SNMPv3 user (floorbit#975). It is the lab's only v3 trap user,
     so Floorbit gives it the usual listener (a further user would get the next one), and the agent's
     Telegraf takes both its v3 trap and a v2c one sent to the same port. Each trap names a port no
-    poll reports (replay.py V3_PORT, V2C_ON_V3_PORT): both names show up in the device's raw data,
-    as Telegraf handed it to the agent."""
+    poll reports (replay.py V3_PORT, V2C_ON_V3_PORT), so access-a1 ends up with two ports more than
+    its twin access-b1. Telemetry answers for the switches meanwhile (telemetry_polls)."""
     device, _, rest = os.environ['LAB_TRAP_V3'].partition('=')
     port = int(rest.rpartition(':')[2])
     ids = {d['name']: d['id'] for d in fb.get('/api/inventory')['devices']}
     target = fb.get(f'/api/telemetry/devices/{ids[device]}')['target']
     assert target['trap_port'] == port and target['trap_user'], target
-    # Not a port count against a twin switch: that changes while the Telegraf tests switch who
-    # polls. The traps' own port names in the raw data don't.
-    seen = set()
+    # With LibreNMS answering (who polls: auto), the device list is LibreNMS's, without these counts.
+    twin = next(sw.name for sw in lab.access if sw.name != device)
 
     def both_traps_in():
-        lines = fb.get('/api/telemetry/raw', params={'name': device}).get('lines') or []
-        seen.update(n for n in ('v3-trap', 'v2c-on-v3') if any(n in str(line) for line in lines))
-        assert seen == {'v3-trap', 'v2c-on-v3'}, f'in the raw data so far: {sorted(seen) or "neither"}'
+        rows = fb.get('/api/telemetry/devices')['devices']
+        mine, theirs = (rows.get(device) or {}).get('ports'), (rows.get(twin) or {}).get('ports')
+        assert mine and theirs, f'no port counts yet: {device} {mine}, {twin} {theirs}'
+        assert mine - theirs == 2, f'{device} has {mine} ports, {twin} {theirs}'
         return True
     eventually(both_traps_in, timeout=180, every=5,
                what=f'the v3 and the v2c trap from {device} on port {port}')
