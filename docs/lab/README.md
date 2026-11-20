@@ -99,8 +99,8 @@ commands, config backups and the terminal from your Floorbit.
 
 Then, in Floorbit: turn on the syslog (port 5514), NetFlow (port 2055) and Telemetry plugins, and
 add the devices to the inventory with the addresses in `lab/senders.yml`, in a group with Telemetry
-on and the SNMP v2c community `public`. What each device needs on top (`telemetry_drivers`,
-`telemetry_mdt_node`, `telemetry_vlans`) is what `telemetry()` in `lab/e2e/setup.py` sets.
+on and the SNMP v2c community `public`. What each device needs on top (`telemetry.drivers`,
+`telemetry.mdt.node`, `telemetry.snmp.vlans`) is what `telemetry()` in `lab/e2e/setup.py` sets.
 
 Without Docker (a laptop or a sandbox), every part as a process on 127.0.0.1; needs redis-server,
 net-snmp's tools, snmpsim with pysmi (`pip install snmpsim==1.2.2 pysmi==2.0.0`, as in `lab/Dockerfile`:

@@ -41,10 +41,10 @@ curl -s http://127.0.0.1:9520/healthz     # {"ok": true, ...} once it reached th
 That's one container. Telegraf, which collects device telemetry (SNMP, traps, gNMI, Cisco MDT),
 is in the image and runs inside the agent when the **Telemetry** plugin is on: there's no
 second container to start. `compose.yml` publishes what is needed by default (9520 on this machine
-only, 162/udp for traps, 57000 for MDT, and 443 and 80 for attendees: check-in, the check-in note on
-phones and the crew's seat walk-through, all on one listener); the ports of the plugins that listen
-for devices in the hall (syslog 514/udp, NetFlow 2055/udp, a firewall's own Telegraf on 8186) are
-commented out until you use them. Every port, and how to check that each
+only, 162/udp for traps (1163-1170/udp for further SNMPv3 trap users), 57000 for MDT, and 443 and 80
+for attendees: check-in, the check-in note on phones and the crew's seat walk-through, all on one
+listener); the ports of the plugins that listen for devices in the hall (syslog 514/udp, NetFlow
+2055/udp, a firewall's own Telegraf on 8186) are commented out until you use them. Every port, and how to check that each
 one works: Floorbit's [docs/agent.md, "Ports"](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md#ports).
 
 **Updating from a compose file with a `telegraf` service:** delete that service, take the new

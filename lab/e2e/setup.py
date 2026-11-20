@@ -152,26 +152,42 @@ def telemetry(fb, args):
         if dev.name not in ids:
             raise SystemExit(f'{dev.name} is not in the inventory')
         host, _, port = where.get(dev.name, dev.ip).partition(':')
-        props = {'telemetry_drivers': 'snmp traps'}
+        props = {'telemetry.drivers': 'snmp traps'}
         if host != dev.ip:
-            props['telemetry_address'] = host
+            props['telemetry.address'] = host
         if port:
-            props['telemetry_port_snmp'] = port
+            props['telemetry.snmp.port'] = port
         if dev.role == 'firewall':
-            platform, props['telemetry_drivers'] = 'OPNsense', 'snmp push'
+            platform, props['telemetry.drivers'] = 'OPNsense', 'snmp push'
         elif dev.role == 'core':
             platform = 'NX-OS'
-            props.update(telemetry_drivers='snmp traps mdt', telemetry_mdt_node=dev.name)
+            props.update({'telemetry.drivers': 'snmp traps mdt', 'telemetry.mdt.node': dev.name})
         else:
             platform = 'IOS'
             vlans = sorted(SEAT_VLAN.values()) if dev.role == 'distribution' else sorted(
                 {s.vlan for s in LAB.seats if s.switch == dev.name})
-            props.update(telemetry_fdb='cisco_vlans', telemetry_vlans=' '.join(str(v) for v in vlans))
+            props.update({'telemetry.snmp.fdb': 'cisco_vlans', 'telemetry.snmp.vlans': ' '.join(str(v) for v in vlans)})
         body = {'platform': platform, 'properties': props}
         status, answer = fb.call('PATCH', f'/api/inventory/{ids[dev.name]}', body)
         if status != 200:
             raise SystemExit(f'Setting up telemetry for {dev.name} failed: {status} {answer}')
     print(f'Set up telemetry for {len(LAB.devices)} devices.')
+    if args.trap_v3:
+        trap_user(fb, args.trap_v3, ids)
+
+
+def trap_user(fb, spec, ids):
+    """One device's own SNMPv3 trap user (floorbit#975), as LAB_TRAP_V3 has it: Floorbit gives
+    it a listener on the collecting agent (the usual one while it is the only v3 trap user)."""
+    device, _, rest = spec.partition('=')
+    login, _, _dest = rest.rpartition('@')
+    user, auth, auth_pass, priv, priv_pass = login.split(':')
+    status, answer = fb.call('PUT', '/api/inventory/credentials', {
+        'owner_type': 'device', 'owner_id': ids[device], 'kind': 'snmp_trap', 'username': user,
+        'auth_protocol': auth, 'secret': auth_pass, 'priv_protocol': priv, 'priv_secret': priv_pass})
+    if status not in (200, 201):
+        raise SystemExit(f'Setting the trap user of {device} failed: {status} {answer}')
+    print(f'{device} sends traps as {user}.')
 
 
 def seed(fb):
@@ -233,6 +249,8 @@ def main(argv=None):
     p.add_argument('--telemetry-on', default='', help='the one agent that collects telemetry')
     p.add_argument('--snmp-devices', default='',
                    help='where Telegraf polls each device, "name=host:port,..." (default: its lab address, port 161)')
+    p.add_argument('--trap-v3', default=os.environ.get('LAB_TRAP_V3', ''),
+                   help="one device's SNMPv3 trap user, as replay.py's LAB_TRAP_V3")
     p.add_argument('--ssh-port', type=int, default=22, help="the switches' SSH port (lab/switch_ssh)")
     # The lab switches' own login (switch_ssh/server.py), not a secret.
     p.add_argument('--ssh-login', default='lab:lab-switch-password', help='user:password')
