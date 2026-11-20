@@ -69,26 +69,26 @@ def agent(tmp_path):
 def test_settings_from_floorbit_go_in_but_the_env_wins(tmp_path):
     env = {"FLOORBIT_AGENT_METRICS": "127.0.0.1:9600", "FLOORBIT_AGENT_ALLOW_ACTIONS": "lancache.*"}
     s = hosted.Settings(str(tmp_path), env, log=lambda *_: None)
-    assert s.take({"metrics": "0.0.0.0:9700", "lan_url": "http://192.0.2.10:8908", "vrrp_vips": ["192.0.2.10/24"],
+    assert s.take({"metrics": "0.0.0.0:9700", "log_level": "debug", "vrrp_vips": ["192.0.2.10/24"],
                    "metrics_token": "example-token", "allow_actions": "*"})
     assert env["FLOORBIT_AGENT_METRICS"] == "127.0.0.1:9600"                  # the hall's own
-    assert env["FLOORBIT_AGENT_LAN_URL"] == "http://192.0.2.10:8908"
+    assert env["FLOORBIT_AGENT_LOG_LEVEL"] == "debug"
     assert env["FLOORBIT_AGENT_VRRP_VIPS"] == "192.0.2.10/24"
     assert env["FLOORBIT_AGENT_ALLOW_ACTIONS"] == "lancache.*"                # never from Floorbit
     got = s.report()
     assert got["values"]["metrics"] == {"source": "env", "value": "127.0.0.1:9600"}
-    assert got["values"]["lan_url"] == {"source": "floorbit", "value": "http://192.0.2.10:8908"}
+    assert got["values"]["log_level"] == {"source": "floorbit", "value": "debug"}
     assert got["values"]["metrics_token"] == {"source": "floorbit", "set": True}
     assert got["values"]["buffer_max_mb"] == {"source": "default"}
     assert got["values"]["FLOORBIT_AGENT_ALLOW_ACTIONS"] == {"source": "env", "value": "lancache.*"}
-    assert got["pending"] == ["metrics_token", "vrrp_vips"]                   # lan_url works at once
+    assert got["pending"] == ["metrics_token", "vrrp_vips"]                   # the log level works at once
     assert "example-token" not in json.dumps(got)
     assert oct(os.stat(tmp_path / hosted.SETTINGS_FILE).st_mode & 0o777) == "0o600"
     # The next start takes them from the file, nothing pending; cleared ones go again.
     env2 = {}
     again = hosted.Settings(str(tmp_path), env2, log=lambda *_: None)
     assert env2["FLOORBIT_AGENT_VRRP_VIPS"] == "192.0.2.10/24" and again.report()["pending"] == []
-    assert not again.take({"metrics": "0.0.0.0:9700", "lan_url": "http://192.0.2.10:8908",
+    assert not again.take({"metrics": "0.0.0.0:9700", "log_level": "debug",
                            "vrrp_vips": ["192.0.2.10/24"], "metrics_token": "example-token"})
     again.take({})
     assert "FLOORBIT_AGENT_VRRP_VIPS" not in env2

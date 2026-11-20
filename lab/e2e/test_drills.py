@@ -142,9 +142,9 @@ def test_the_pages_still_answer_and_telemetry_goes_on(fb, lab):
 
 @pytest.mark.drill('hosted-down')
 def test_the_check_in_note_keeps_answering(lab):
-    url = os.environ.get('LAB_CAPTIVE')
+    url = os.environ.get('LAB_FRONT_DOOR')
     if not url:
-        pytest.skip('LAB_CAPTIVE is not set')
+        pytest.skip('LAB_FRONT_DOOR is not set')
 
     def ask(seat):
         r = requests.get(f'{url}/.well-known/captive-portal', headers={'X-Forwarded-For': seat.ip}, timeout=10)
