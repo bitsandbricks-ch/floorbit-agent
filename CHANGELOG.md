@@ -10,6 +10,18 @@ All notable changes to this project are listed here. The format follows
 
 - Every request to Floorbit is signed with the agent's own key (bitsandbricks-ch/floorbit#1178): made on the agent (`tls/identity-key.pem`), enrolled at the first hello, where Floorbit's agents CA signs a client certificate and pins the key, and renewed 30 days before the end. The WebSocket link and the front door's requests are signed too. The agent signs with Floorbit's time (from its answers' `Date`), and a refused signature is retried, never fatal. Needs a Floorbit with bitsandbricks-ch/floorbit#1178.
 
+### Changed
+
+- One port for attendees: the front door answers the check-in note on phones (`/.well-known/captive-portal`) and the crew's seat walk-through (`/floorbit/hello/<code>`) itself, so `/` on the agent is the check-in page and port 8908 is gone. `compose.yml` publishes 443 and 80; with a certificate, port 80 sends browsers on to HTTPS. Built on Floorbit #986, where the front door is on by default.
+- The agent learns where browsers in the hall reach it and reports it for the seat walk-through: `FLOORBIT_AGENT_LAN_URL` is gone (Floorbit #999).
+
+### Fixed
+
+- Security: a crew member who signed in through the front door no longer signs in every attendee behind it. The front door kept the hosted side's cookies for everyone (#65).
+- Pages through the front door no longer go blank on a second visit: answers without a body (304 for a cached file) no longer carry an empty chunk that broke the next answer on the connection (#66).
+- Browsers that drop a connection (preconnects, a closed tab) no longer print a `ConnectionResetError` stack trace. HTTPS on the plain port, or plain HTTP on the HTTPS port, gives one log line now and then that says which address to open (#62).
+- The front door and the plugin listeners now cap connections per client like the other listeners, and do the TLS handshake in the request's thread, so a slow client can't hold up the listener.
+
 ### Added
 
 - Answers `device_facts` (Floorbit #966): what a device is (VLANs, networks, transceivers, ...) for discovery, from telemetry first and LibreNMS for the rest, so discovery works with LibreNMS alone.

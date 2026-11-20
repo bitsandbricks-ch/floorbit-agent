@@ -4,7 +4,7 @@ import urllib.request
 
 import pytest
 
-from floorbit_agent import captive
+from floorbit_agent import captive, front_door
 from tests.test_agent import FakeHost, Resp, make
 
 PORTAL = "https://floor.example.com/checkin"
@@ -12,6 +12,14 @@ PORTAL = "https://floor.example.com/checkin"
 
 def quiet(*_):
     pass
+
+
+def serve(api):
+    """The note and the hello are answered on the front door's port (one port for attendees)."""
+    door = front_door.FrontDoor("https://floor.example.com", "fba_0123abcd_example-key-for-tests-only",
+                                http=type("Away", (), {"request": lambda *a, **k: (_ for _ in ()).throw(OSError())})(),
+                                log=quiet)
+    return front_door.serve(door, "127.0.0.1:0", captive=api, log=quiet)
 
 
 def test_only_a_known_client_that_did_not_check_in_sees_the_note():
@@ -49,7 +57,7 @@ def test_the_portal_url_can_be_set_here_and_the_proxy_is_trusted():
 def test_it_answers_over_http_as_captive_json():
     api = captive.Captive(lambda: {"done": [], "portal_url": PORTAL}, log=quiet)
     api.refresh()
-    server = captive.serve(api, "127.0.0.1:0", log=quiet)
+    server = serve(api)
     try:
         port = server.server_address[1]
         with urllib.request.urlopen(f"http://127.0.0.1:{port}{captive.PATH}", timeout=5) as resp:
@@ -93,7 +101,7 @@ def test_the_hello_over_http_redirects_and_escapes_its_page():
     said = []
     api = captive.Captive(lambda: {"done": []}, log=quiet, proxies=["127.0.0.1"],
                           say_hello=lambda code, ip: said.append((code, ip)), floorbit_url="https://floor.example.com")
-    server = captive.serve(api, "127.0.0.1:0", log=quiet)
+    server = serve(api)
 
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args):
@@ -126,9 +134,14 @@ def test_the_agent_reports_the_hello_and_where_laptops_reach_it(monkeypatch):
     with pytest.raises(RuntimeError, match="too old"):
         make(type("H", (FakeHost,), {"post": lambda self, *a, **k: Resp(404, {"error": "too old"})})()
              ).seat_walk_hello(CODE, "192.0.2.50")
-    monkeypatch.setenv("FLOORBIT_AGENT_LAN_URL", "http://agent.lan.example.com:8908/")
-    assert make(FakeHost()).lan_url == "http://agent.lan.example.com:8908"
-    assert make(FakeHost()).report()["lan_url"] == "http://agent.lan.example.com:8908"
+    # Nobody sets where laptops reach it: the front door learns it from the hall's requests.
+    monkeypatch.setattr(front_door, "_seen", {"url": "", "at": 0.0})
+    assert "lan_url" not in make(FakeHost()).report()
+    front_door._saw("203.0.113.5", False, "203.0.113.9")        # not from the hall: ignored
+    front_door._saw("checkin.lan", False, "10.10.1.20")
+    assert make(FakeHost()).report()["lan_url"] == "http://checkin.lan"
+    front_door._saw("evil.example/<x>", True, "10.10.1.20")      # not a host name: ignored
+    assert make(FakeHost()).lan_url == "http://checkin.lan"
 
 
 def test_it_counts_answers_and_says_when_the_list_is_failing():
