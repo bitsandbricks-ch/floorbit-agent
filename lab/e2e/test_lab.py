@@ -302,19 +302,24 @@ def test_a_devices_own_snmpv3_trap_user_gets_its_listener(fb, lab):
     """access-a1 sends traps as its own SNMPv3 user (floorbit#975). It is the lab's only v3 trap user,
     so Floorbit gives it the usual listener (a further user would get the next one), and the agent's
     Telegraf takes both its v3 trap and a v2c one sent to the same port. Each trap names a port no
-    poll reports, so each one adds a port to access-a1 that its twin access-b1 doesn't have."""
+    poll reports (replay.py V3_PORT, V2C_ON_V3_PORT): both names show up in the device's raw data,
+    as Telegraf handed it to the agent."""
     device, _, rest = os.environ['LAB_TRAP_V3'].partition('=')
     port = int(rest.rpartition(':')[2])
     ids = {d['name']: d['id'] for d in fb.get('/api/inventory')['devices']}
     target = fb.get(f'/api/telemetry/devices/{ids[device]}')['target']
     assert target['trap_port'] == port and target['trap_user'], target
-    twin = next(sw.name for sw in lab.access if sw.name != device)
+    # Not a port count against a twin switch: that changes while the Telegraf tests switch who
+    # polls. The traps' own port names in the raw data don't.
+    seen = set()
 
     def both_traps_in():
-        rows = fb.get('/api/telemetry/devices')['devices']
-        mine, theirs = (rows.get(device) or {}).get('ports'), (rows.get(twin) or {}).get('ports')
-        return mine and theirs and mine - theirs == 2
-    eventually(both_traps_in, timeout=180, every=5, what=f'the v3 and the v2c trap from {device} on port {port}')
+        lines = fb.get('/api/telemetry/raw', params={'name': device}).get('lines') or []
+        seen.update(n for n in ('v3-trap', 'v2c-on-v3') if any(n in str(line) for line in lines))
+        assert seen == {'v3-trap', 'v2c-on-v3'}, f'in the raw data so far: {sorted(seen) or "neither"}'
+        return True
+    eventually(both_traps_in, timeout=180, every=5,
+               what=f'the v3 and the v2c trap from {device} on port {port}')
     trouble = [p for p in ((fb.get('/api/telemetry/devices')['devices'].get(device) or {}).get('problems') or [])
                if p.get('driver') == 'traps']
     assert not trouble, trouble
