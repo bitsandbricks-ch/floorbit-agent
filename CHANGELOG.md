@@ -6,6 +6,10 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Every request to Floorbit is signed with the agent's own key (bitsandbricks-ch/floorbit#1178): made on the agent (`tls/identity-key.pem`), enrolled at the first hello, where Floorbit's agents CA signs a client certificate and pins the key, and renewed 30 days before the end. The WebSocket link and the front door's requests are signed too. The agent signs with Floorbit's time (from its answers' `Date`), and a refused signature is retried, never fatal. Needs a Floorbit with bitsandbricks-ch/floorbit#1178.
+
 ### Changed
 
 - One port for attendees: the front door answers the check-in note on phones (`/.well-known/captive-portal`) and the crew's seat walk-through (`/floorbit/hello/<code>`) itself, so `/` on the agent is the check-in page and port 8908 is gone. `compose.yml` publishes 443 and 80; with a certificate, port 80 sends browsers on to HTTPS. Built on Floorbit #986, where the front door is on by default.

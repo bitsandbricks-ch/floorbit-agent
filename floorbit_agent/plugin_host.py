@@ -649,7 +649,10 @@ class PluginHost:
                 if self.supported is False:
                     wait = PULL_UNSUPPORTED
             except Exception as exc:  # noqa: BLE001  # the main loop says when the hosted side is away
-                self.log(f'[agent] could not get the plugin settings: {exc}')
+                from . import IdentityRefused
+                # Before its first hello the agent hasn't enrolled its key: hello does, then wakes this.
+                if not isinstance(exc, IdentityRefused):
+                    self.log(f'[agent] could not get the plugin settings: {exc}')
             self._reload.wait(wait)
             self._reload.clear()
 
