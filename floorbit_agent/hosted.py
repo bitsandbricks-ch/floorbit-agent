@@ -49,6 +49,9 @@ CERT_RETRY = 600          # seconds between tries after the hosted side said no
 # The tenant's Let's Encrypt certificate (floorbit/public_cert.py): its key comes sealed to ours.
 SEAL_ALG = 'ECDH-ES+A256GCM'
 SEAL_INFO = b'floorbit agent tls key v1'
+# Where the Let's Encrypt pair is handed to the listeners (server_context), next to the CA's pair in
+# FLOORBIT_AGENT_TLS_CERT/_KEY. Set by the agent itself, not by the hall.
+PUBLIC_CERT_ENV, PUBLIC_KEY_ENV = 'FLOORBIT_AGENT_TLS_PUBLIC_CERT', 'FLOORBIT_AGENT_TLS_PUBLIC_KEY'
 
 
 def _write_private(path, text):
@@ -223,6 +226,73 @@ def open_sealed(private_key, box):
 
 # ── the certificate ─────────────────────────────────────────────────────────────────────────────
 
+def read_cert(path):
+    """(names, not_after, issuer CN) of a certificate file, or None."""
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    try:
+        with open(path, 'rb') as f:
+            cert = x509.load_pem_x509_certificates(f.read())[0]
+    except (OSError, ValueError, IndexError):
+        return None
+    try:
+        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        names = [str(n) for n in sans.get_values_for_type(x509.DNSName)] + \
+                [str(n) for n in sans.get_values_for_type(x509.IPAddress)]
+    except x509.ExtensionNotFound:
+        names = []
+    issuer = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
+    return names, cert.not_valid_after_utc.timestamp(), issuer[0].value if issuer else ''
+
+
+def _name_matches(name, names):
+    name = name.rstrip('.').lower()
+    for n in names:
+        n = n.lower()
+        if n == name or (n.startswith('*.') and name.count('.') == n.count('.') and name.endswith(n[1:])):
+            return True
+    return False
+
+
+def server_context(env, now=time.time):
+    """The TLS context for the agent's HTTPS listeners, or None without a certificate.
+
+    Two pairs, chosen per connection by the name the browser asks for (SNI): the tenant's Let's
+    Encrypt certificate for its own name while it is valid, the CA's (or the hall's) for everything
+    else: the agent's address, a name from the CA certificate, no name at all. So a laptop that came
+    by the public name gets a certificate it trusts, and crew that came by IP still get one that
+    matches. Raises OSError or ssl.SSLError when the CA's pair can't be loaded."""
+    import ssl
+
+    def context(cert, key):
+        c = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        c.minimum_version = ssl.TLSVersion.TLSv1_2
+        c.load_cert_chain(cert, key)
+        return c
+    public = None
+    pcert, pkey = str(env.get(PUBLIC_CERT_ENV) or '').strip(), str(env.get(PUBLIC_KEY_ENV) or '').strip()
+    found = read_cert(pcert) if pcert and pkey else None
+    if found and found[1] > now():
+        try:
+            public = context(pcert, pkey)
+        except (OSError, ssl.SSLError):
+            public = None    # a broken pair: the CA's serves everyone
+    cert = str(env.get('FLOORBIT_AGENT_TLS_CERT') or '').strip()
+    key = str(env.get('FLOORBIT_AGENT_TLS_KEY') or '').strip()
+    if not cert or not key:
+        return public
+    default = context(cert, key)
+    if public is not None:
+        names, not_after = found[0], found[1]
+
+        def pick(sock, server_name, _context):
+            # Expired while the listener ran: the CA's again, until a renewed one restarts it.
+            if server_name and _name_matches(server_name, names) and now() < not_after:
+                sock.context = public
+        default.sni_callback = pick
+    return default
+
+
 class Certificate:
     def __init__(self, root, env=None, log=print, now=time.time):
         self.env = os.environ if env is None else env
@@ -232,7 +302,7 @@ class Certificate:
         self.hall_set = bool(str(self.env.get('FLOORBIT_AGENT_TLS_CERT') or '').strip())
         self.failed_at = 0
         self.public_failed_at = 0
-        if not self.hall_set and os.path.exists(self.cert_path) and os.path.exists(self.key_path):
+        if not self.hall_set:
             self._use()
 
     @property
@@ -245,35 +315,31 @@ class Certificate:
         return os.path.join(self.dir, 'agent-key.pem')
 
     @property
+    def public_cert_path(self):
+        """The tenant's Let's Encrypt certificate, served next to the CA's (server_context)."""
+        return os.path.join(self.dir, 'public.pem')
+
+    @property
     def shared_key_path(self):
-        """The tenant's Let's Encrypt key, when agent.pem is that certificate."""
+        """The tenant's Let's Encrypt key, shared by its agents."""
         return os.path.join(self.dir, 'public-key.pem')
 
     @property
     def public(self):
-        return os.path.exists(self.shared_key_path)
+        return os.path.exists(self.public_cert_path) and os.path.exists(self.shared_key_path)
 
     def _use(self):
-        self.env['FLOORBIT_AGENT_TLS_CERT'] = self.cert_path
-        self.env['FLOORBIT_AGENT_TLS_KEY'] = self.shared_key_path if self.public else self.key_path
+        if os.path.exists(self.cert_path) and os.path.exists(self.key_path):
+            self.env['FLOORBIT_AGENT_TLS_CERT'] = self.cert_path
+            self.env['FLOORBIT_AGENT_TLS_KEY'] = self.key_path
+        if self.public:
+            self.env[PUBLIC_CERT_ENV], self.env[PUBLIC_KEY_ENV] = self.public_cert_path, self.shared_key_path
+        else:
+            self.env.pop(PUBLIC_CERT_ENV, None)
+            self.env.pop(PUBLIC_KEY_ENV, None)
 
     def _read(self, path=None):
-        """(names, not_after, issuer CN) of a certificate file, or None."""
-        from cryptography import x509
-        from cryptography.x509.oid import NameOID
-        try:
-            with open(path or self.cert_path, 'rb') as f:
-                cert = x509.load_pem_x509_certificates(f.read())[0]
-        except (OSError, ValueError, IndexError):
-            return None
-        try:
-            sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-            names = [str(n) for n in sans.get_values_for_type(x509.DNSName)] + \
-                    [str(n) for n in sans.get_values_for_type(x509.IPAddress)]
-        except x509.ExtensionNotFound:
-            names = []
-        issuer = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
-        return names, cert.not_valid_after_utc.timestamp(), issuer[0].value if issuer else ''
+        return read_cert(path or self.cert_path)
 
     def wanted(self, block):
         """Does Floorbit's ``{"names", "asked"}`` call for a new certificate?"""
@@ -289,7 +355,7 @@ class Certificate:
             issued = os.path.getmtime(self.cert_path)
         except OSError:
             issued = 0
-        return (self.public or sorted(names) != sorted(str(n) for n in block['names'])
+        return (sorted(names) != sorted(str(n) for n in block['names'])
                 or not_after - self.now() < RENEW_DAYS * 86400
                 or (block.get('asked') or 0) > issued)
 
@@ -327,8 +393,6 @@ class Certificate:
             self.failed_at = self.now()
             return False
         _write_private(self.cert_path, pem)
-        if self.public:
-            os.remove(self.shared_key_path)
         self._use()
         self.log(f'[agent] new certificate from Floorbit for {", ".join(names)}')
         return True
@@ -356,11 +420,11 @@ class Certificate:
             return False
         if self.now() - self.public_failed_at < CERT_RETRY:
             return False
-        found = self._read() if self.public else None
+        found = self._read(self.public_cert_path) if self.public else None
         if found is None:
             return True
         try:
-            issued = os.path.getmtime(self.cert_path)
+            issued = os.path.getmtime(self.public_cert_path)
         except OSError:
             issued = 0
         return found[0] != [str(block['name'])] or (block.get('asked') or 0) > issued
@@ -395,9 +459,21 @@ class Certificate:
             self.log('[agent] the Let\'s Encrypt certificate and its key from Floorbit do not match; kept the old one')
             return False
         _write_private(self.shared_key_path, shared)
-        _write_private(self.cert_path, pem)
+        _write_private(self.public_cert_path, pem)
         self._use()
         self.log(f'[agent] Let\'s Encrypt certificate from Floorbit for {block["name"]}')
+        return True
+
+    def drop_public(self):
+        """Floorbit has no Let's Encrypt certificate for us any more: only the CA's serves. True when
+        there was one."""
+        if not os.path.exists(self.public_cert_path) and not os.path.exists(self.shared_key_path):
+            return False
+        for path in (self.public_cert_path, self.shared_key_path):
+            with contextlib.suppress(OSError):
+                os.remove(path)
+        self._use()
+        self.log('[agent] Floorbit has no Let\'s Encrypt certificate for us any more; serving the CA\'s')
         return True
 
     def report(self):
@@ -408,8 +484,11 @@ class Certificate:
         if found is None:
             return None
         names, not_after, issuer = found
+        public = read_cert(self.public_cert_path) if not self.hall_set and self.public else None
         return {'names': names, 'not_after': not_after, 'source': 'env' if self.hall_set else 'floorbit',
-                'floorbit_ca': issuer == CA_NAME, 'public': not self.hall_set and self.public}
+                'floorbit_ca': issuer == CA_NAME,
+                # Served to browsers that ask for its name (server_context); the CA's to the rest.
+                'public': {'names': public[0], 'not_after': public[1]} if public else None}
 
 
 

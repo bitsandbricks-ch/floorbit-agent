@@ -439,13 +439,14 @@ class Agent:
             except Exception as exc:  # noqa: BLE001
                 self.log(f'[agent] could not fetch the new key: {type(exc).__name__}: {exc}')
         try:
-            public, changed = block.get('public_cert'), False
+            # Both pairs: the CA's for the agent's address and names, the tenant's Let's Encrypt one
+            # for its public name; the listeners pick per connection (hosted.server_context).
+            changed = bool(h.cert.wanted(block.get('cert')) and h.cert.fetch(self, block['cert']))
+            public = block.get('public_cert')
             if public:
-                # The tenant's Let's Encrypt certificate wins over the CA's (hosted.py).
-                changed = h.cert.public_wanted(public) and h.cert.fetch_public(self, public)
-            if not public or (not changed and not h.cert.public):
-                # Until it has the Let's Encrypt one, the CA's keeps the listeners up.
-                changed = (h.cert.wanted(block.get('cert')) and h.cert.fetch(self, block['cert'])) or changed
+                changed = bool(h.cert.public_wanted(public) and h.cert.fetch_public(self, public)) or changed
+            else:
+                changed = h.cert.drop_public() or changed
             if changed and self.plugins is not None:
                 self.plugins.restart_tls()
         except Exception as exc:  # noqa: BLE001

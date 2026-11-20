@@ -89,11 +89,12 @@ days before the end. Install the CA (*Download CA* on the Local agents page) on 
 `FLOORBIT_AGENT_TLS_CERT` and `_KEY` set by the hall win.
 
 **Let's Encrypt.** When the hosted Floorbit has a domain for its agents, it sends the tenant's
-Let's Encrypt certificate for `<tenant>.agent.<domain>` instead, so laptops trust the front door
-without a CA. All the tenant's agents share that certificate's key: Floorbit sends it encrypted to
-the agent's own key (ECDH P-256, HKDF-SHA256, AES-256-GCM), and the agent keeps it in
-`tls/public-key.pem` (0600). Until it arrives, the CA's certificate keeps the listeners up. Point the
-name at the agent in the hall's DNS.
+Let's Encrypt certificate for `<tenant>.agent.<domain>` as well, so laptops trust the front door
+without a CA. The listeners keep both and pick per connection by the name the browser asks for: the
+Let's Encrypt one for its own name while it is valid, the CA's for the agent's address, its other
+names and browsers that send no name. All the tenant's agents share the Let's Encrypt key: Floorbit
+sends it encrypted to the agent's own key (ECDH P-256, HKDF-SHA256, AES-256-GCM), and the agent keeps
+it in `tls/public-key.pem` (0600). Point the name at the agent in the hall's DNS.
 
 ## Settings from an older agent
 

@@ -25,7 +25,6 @@ sign-in needs that, because session cookies are only sent over HTTPS.
 import ipaddress
 import json
 import re
-import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
@@ -240,10 +239,8 @@ def tls_context(env):
     cert, key = env.get('FLOORBIT_AGENT_TLS_CERT', '').strip(), env.get('FLOORBIT_AGENT_TLS_KEY', '').strip()
     if not cert or not key:
         return None
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(cert, key)
-    return context
+    from .hosted import server_context
+    return server_context(env)
 
 
 def serve(door, address, context=None):

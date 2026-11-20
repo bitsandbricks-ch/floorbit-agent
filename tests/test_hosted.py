@@ -189,38 +189,95 @@ def test_a_certificate_the_hall_set_wins_and_a_refusal_waits(agent, tmp_path):
 
 
 
-def test_the_tenant_s_lets_encrypt_certificate_wins_and_its_key_comes_sealed(agent, tmp_path):
+def test_the_tenant_s_lets_encrypt_certificate_comes_next_to_the_ca_s_its_key_sealed(agent, tmp_path):
     env = {}
     agent.hosted = hosted.Hosted(str(tmp_path), env=env, log=lambda *_: None)
     restarted = []
     agent.plugins = type("P", (), {"restart_tls": lambda self: restarted.append(1), "report": lambda self: {}})()
-    # Not there yet: the CA's keeps the listeners up meanwhile.
+    # Not there yet: the CA's serves meanwhile.
     agent.http.public_status = 409
-    ca_block = {"names": ["192.0.2.10"], "asked": 0}
+    ca_block = {"names": ["agent.example.com"], "asked": 0}
     agent.take_hosted({"settings": {}, "cert": ca_block, "public_cert": {"name": "club.agent.example.com", "asked": 1}})
-    assert [b.get("public") for _, _, b in agent.http.posts] == [True, None]
+    assert [b.get("public") for _, _, b in agent.http.posts] == [None, True]
     assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem") and restarted == [1]
+    assert hosted.PUBLIC_KEY_ENV not in env
     agent.hosted.cert.public_failed_at = 0
     agent.http.public_status = 200
     block = {"name": "club.agent.example.com", "asked": 1}
     agent.take_hosted({"settings": {}, "cert": ca_block, "public_cert": block})
     _, _, body = agent.http.posts[-1]
     assert body["public"] is True and "PRIVATE" not in body["csr"]
-    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("public-key.pem") and restarted == [1, 1]
-    assert oct(os.stat(env["FLOORBIT_AGENT_TLS_KEY"]).st_mode & 0o777) == "0o600"
-    with open(env["FLOORBIT_AGENT_TLS_KEY"]) as f:
+    # Both pairs: the CA's stays, the Let's Encrypt one comes next to it.
+    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem")
+    assert env[hosted.PUBLIC_KEY_ENV].endswith("public-key.pem") and restarted == [1, 1]
+    assert oct(os.stat(env[hosted.PUBLIC_KEY_ENV]).st_mode & 0o777) == "0o600"
+    with open(env[hosted.PUBLIC_KEY_ENV]) as f:
         assert "BEGIN PRIVATE KEY" in f.read()
     report = agent.report()["settings"]["cert"]
-    assert report["names"] == ["club.agent.example.com"] and report["public"] and not report["floorbit_ca"]
+    assert report["floorbit_ca"] and report["public"]["names"] == ["club.agent.example.com"]
     cert = agent.hosted.cert
-    assert not cert.public_wanted(block)
-    assert cert.public_wanted({**block, "asked": os.path.getmtime(cert.cert_path) + 10})    # renewed on Floorbit
-    # Restarted, it serves the shared key; the domain gone, it goes back to the CA's.
+    assert not cert.public_wanted(block) and not cert.wanted(ca_block)
+    assert cert.public_wanted({**block, "asked": os.path.getmtime(cert.public_cert_path) + 10})   # renewed
+    # Restarted, it serves both; the domain gone, only the CA's.
     env2 = {}
     hosted.Certificate(str(tmp_path), env2)
-    assert env2["FLOORBIT_AGENT_TLS_KEY"].endswith("public-key.pem")
+    assert env2[hosted.PUBLIC_KEY_ENV].endswith("public-key.pem")
+    assert env2["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem")
     agent.take_hosted({"settings": {}, "cert": ca_block})
-    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem") and not cert.public
+    assert hosted.PUBLIC_KEY_ENV not in env and not cert.public and restarted == [1, 1, 1]
+    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem")
+
+
+def _served(context, name):
+    """The common name of the certificate a TLS server with ``context`` shows a browser asking for
+    ``name`` (None: no SNI)."""
+    import contextlib
+    import ssl
+
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client.check_hostname, client.verify_mode = False, ssl.CERT_NONE
+    c_in, c_out, s_in, s_out = ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO()
+    c = client.wrap_bio(c_in, c_out, server_hostname=name)
+    s = context.wrap_bio(s_in, s_out, server_side=True)
+    for _ in range(10):
+        for side in (c, s):
+            with contextlib.suppress(ssl.SSLWantReadError):
+                side.do_handshake()
+        s_in.write(c_out.read())
+        c_in.write(s_out.read())
+        if c.version() and s.version():
+            break
+    leaf = x509.load_der_x509_certificate(c.getpeercert(binary_form=True))
+    return leaf.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+
+
+def test_listeners_serve_lets_encrypt_by_its_name_and_the_ca_s_to_the_rest(agent, tmp_path):
+    env = {}
+    agent.hosted = hosted.Hosted(str(tmp_path), env=env, log=lambda *_: None)
+    agent.take_hosted({"settings": {}, "cert": {"names": ["192.0.2.10"]},
+                       "public_cert": {"name": "club.agent.example.com", "asked": 1}})
+    context = hosted.server_context(env)
+    assert _served(context, "club.agent.example.com") == "club.agent.example.com"
+    assert _served(context, "CLUB.agent.example.com.") == "club.agent.example.com"
+    # By IP (no SNI), by a name on the CA's certificate, by any other name: the CA's.
+    assert _served(context, None) == "192.0.2.10"
+    assert _served(context, "agent.example.com") == "192.0.2.10"
+    assert _served(context, "other.agent.example.com") == "192.0.2.10"
+    # Expired (the clock moved past it): the CA's for its name too.
+    late = hosted.server_context(env, now=lambda: 4e9)
+    assert _served(late, "club.agent.example.com") == "192.0.2.10"
+    # A broken Let's Encrypt pair never stops the listeners.
+    with open(env[hosted.PUBLIC_KEY_ENV], "w") as f:
+        f.write("not a key")
+    assert _served(hosted.server_context(env), "club.agent.example.com") == "192.0.2.10"
+
+
+def test_wildcard_names_match_one_label():
+    assert hosted._name_matches("a.example.com", ["*.example.com"])
+    assert not hosted._name_matches("a.b.example.com", ["*.example.com"])
+    assert not hosted._name_matches("example.com", ["*.example.com"])
 
 
 def test_a_sealed_key_for_another_agent_is_refused(agent, tmp_path):

@@ -418,14 +418,12 @@ class AgentContext:
         if not cert or not key:
             self.log('no FLOORBIT_AGENT_TLS_CERT/KEY: listening on plain HTTP, keep it on the event network')
             return None
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        from .hosted import server_context
         try:
-            context.load_cert_chain(cert, key)
+            return server_context(env)
         except (OSError, ssl.SSLError) as exc:
             from floorbit.plugins.base import PluginError
             raise PluginError(f'cannot use the TLS certificate {cert}: {exc}') from exc
-        return context
 
     def close(self):
         self.stopping.set()
