@@ -355,6 +355,29 @@ def push(url, lines, token=''):
         answer.read()
 
 
+# Rounds a push has failed in a row, per what and where. The simulators start with the lab, often
+# before the agent's Telegraf listens, so the first misses are expected: say it once, then only
+# while it keeps failing, and again when it works.
+_failing = {}
+SAY_AGAIN = 30
+
+
+def _send(what, url, lines, log):
+    key = (what, url)
+    try:
+        push(url, lines, telemetry_token())
+    except OSError as exc:
+        rounds = _failing[key] = _failing.get(key, 0) + 1
+        if rounds == 1:
+            log(f'{what} to {url} failed: {exc} (trying again each round)')
+        elif rounds % SAY_AGAIN == 0:
+            log(f'{what} to {url} still failing after {rounds} rounds: {exc}')
+        return False
+    if rounds := _failing.pop(key, 0):
+        log(f'{what} to {url} works again after {rounds} failed round(s)')
+    return True
+
+
 # --- the loop -------------------------------------------------------------------------------
 
 def one_round(rnd, now, seq=0, device=None, log=print):
@@ -382,18 +405,12 @@ def one_round(rnd, now, seq=0, device=None, log=print):
         sent['lancache'] = len(access) + len(dns)
     if (url := os.environ.get('LAB_PUSH_URL')) and (not device or (me and me.role == 'firewall')):
         lines = [line for line in opnsense_lines(rnd, now) if not me or f'host={me.name}.' in line]
-        try:
-            push(url, lines, telemetry_token())
+        if _send('push', url, lines, log):
             sent['push'] = len(lines)
-        except OSError as exc:
-            log(f'push to {url} failed: {exc}')
     if (url := os.environ.get('LAB_STREAM_URL')) and (not device or me is LAB.core):
         lines = streamed_lines(rnd, now) + wireless_lines(rnd, now)
-        try:
-            push(url, lines, telemetry_token())
+        if _send('stream', url, lines, log):
             sent['stream'] = len(lines)
-        except OSError as exc:
-            log(f'stream to {url} failed: {exc}')
     return sent
 
 

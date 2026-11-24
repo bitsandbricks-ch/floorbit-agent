@@ -371,7 +371,8 @@ def test_the_other_agent_takes_over(fb, lab):
     seat = lab.seat('D-20')
     found = eventually(lambda: fb.get(f'/api/resolve/{seat.ip}'), what='a lookup through the other agent')
     assert (found['hostname'], found['port']) == (seat.switch, short(seat.port))
-    assert fb.get('/api/monitoring/health')['ok']
+    # The other agent answers lookups before its first LibreNMS call is through: wait for that too.
+    eventually(lambda: fb.get('/api/monitoring/health')['ok'], what='monitoring through the other agent')
 
 
 @pytest.mark.failover
