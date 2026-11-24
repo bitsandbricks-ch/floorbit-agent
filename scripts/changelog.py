@@ -68,6 +68,8 @@ def collected():
 def merge_into_unreleased(changelog, merged):
     """CHANGELOG.md text with the fragments added to [Unreleased], under their headings."""
     if '## [Unreleased]' not in changelog:
+        if not merged:
+            return changelog
         # Above the newest release, or at the end when there is none yet.
         first = re.search(r'(?m)^## ', changelog)
         at = first.start() if first else len(changelog.rstrip('\n')) + 2
