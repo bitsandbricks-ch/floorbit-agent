@@ -9,6 +9,19 @@ profile **agent** (see `.mason.toml`). Read its core chapters and the blocks tha
 above all [local agents](https://github.com/bitsandbricks-ch/handbook/blob/main/blocks/local-agents.md).
 Where this file differs from the handbook, this file wins for this repo.
 
+**Where this agent differs from the handbook's agent contract, on purpose** (Mike, 2026-11-24):
+
+- **SSH to switches.** The agent is the only way Floorbit reaches the event network, so port
+  actions, switch commands, config backups and the switch terminal open their SSH connection here,
+  not from fixed signed jobs only.
+- **Features on by default.** A crew starts a fresh agent with nothing to set up; the front door,
+  seat walk-through and check-in note work without switching each one on.
+- **Its own protocol.** `Floorbit-Agent-Protocol` 2: WebSocket with an HTTPS long-poll fallback,
+  not the handbook's agent protocol 1. The handbook's conformance tests don't apply.
+
+Outbound only, enrolment and revoke, signed releases and audit still hold. Don't propose to change
+these; a change is Mike's call.
+
 ## What this is
 
 The local agent for a hosted Floorbit: it runs on the event network and answers for it over one outgoing HTTPS connection. Overview for users: [README.md](README.md).
@@ -47,7 +60,8 @@ when the other side can't follow.
 - **No secrets** in code, commits, screenshots, logs or docs. Use example values (`example.com`).
 - **Names:** the brand is written "BitsAndBricks". Public text names the author as "Mike" only.
 - **Releases:** don't edit `VERSION` or the changelog headings by hand; `mason bump` does that.
-  Add your change under `## [Unreleased]` in `CHANGELOG.md`.
+  Describe your change in a new `changelog.d/<topic>.md` fragment, not in `CHANGELOG.md`
+  (see `changelog.d/README.md`).
 - **Workflows:** pin every action to a full commit sha with the version as a comment
   (`uses: actions/checkout@<sha> # v7.0.1`), keep `permissions` minimal, and never put
   `${{ github.event.* }}` text straight into a `run:` script (pass it through `env:`).

@@ -2,7 +2,8 @@
 
 All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/). `mason bump` turns `[Unreleased]` into the new version.
+[Semantic Versioning](https://semver.org/). New entries are fragments in `changelog.d/`;
+`python scripts/changelog.py collect` adds them here, then `mason bump` turns `[Unreleased]` into the new version.
 
 ## [Unreleased]
 

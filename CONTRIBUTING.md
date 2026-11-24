@@ -13,7 +13,7 @@ bug reports, ideas, docs fixes and code.
 
 1. Fork the repo (or make a branch, if you have access) and keep one topic per pull request.
 2. Run the checks from the README's "Develop" section before you push.
-3. Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything users notice.
+3. Add a `changelog.d/<topic>.md` fragment for anything users notice (see [changelog.d/README.md](changelog.d/README.md)).
 4. Open the pull request and fill in the template. CI must be green before it can be merged.
 
 Coding agents: [AGENTS.md](AGENTS.md) has the rules you follow.
