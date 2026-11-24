@@ -10,6 +10,7 @@ import urllib.request
 import pytest
 
 import floorbit_agent as agent_mod
+from floorbit_agent import plugin_host
 from floorbit_agent.metrics import Metrics
 from floorbit_agent.plugin_host import PluginHost
 
@@ -402,6 +403,82 @@ def test_a_bad_hint_is_ignored(setup):
         hosted.ha, hosted.etag = bad, f"e-{bad!r}"
         host.pull()
         assert host.primary(), bad
+
+
+# ── Floorbit's lease (Floorbit issue #1405): who of a group polls and logs in ────────────────
+
+
+def lease(primary, members=2):
+    return {"lease": {"primary": primary, "members": members}}
+
+
+def test_the_lease_says_who_polls_and_logs_in(setup):
+    host, hosted, agent, lines = setup
+    agent.last_contact = time.time()
+    hosted.ha, hosted.etag = lease(False), "e1"
+    host.pull()
+    assert not host.primary() and not host.may_login()
+    hosted.ha, hosted.etag = lease(True), "e2"
+    host.pull()
+    assert host.primary() and host.may_login()
+    assert any("its group's primary" in line for line in lines)
+    assert agent.report()["lease"] is True
+
+
+def test_the_lease_wins_over_vrrp(setup):
+    host, hosted, agent, _lines = setup
+    agent.last_contact = time.time()
+    host.vrrp = FakeVrrp("BACKUP")
+    hosted.ha, hosted.etag = lease(True), "e1"
+    host.pull()
+    assert host.primary()
+    host.vrrp = FakeVrrp("MASTER")
+    hosted.ha, hosted.etag = lease(False), "e2"
+    host.pull()
+    assert not host.primary()
+
+
+def test_without_floorbit_each_keeps_its_role_but_logins_wait(setup):
+    host, hosted, agent, _lines = setup
+    agent.last_contact = time.time()
+    hosted.ha, hosted.etag = lease(True), "e1"
+    host.pull()
+    agent.last_contact = time.time() - plugin_host.LEASE_HOLD - 1        # Floorbit out of reach
+    assert host.primary()                                     # it keeps polling
+    assert not host.may_login()                               # Floorbit may have moved the lease
+    hosted.ha, hosted.etag = lease(False), "e2"
+    host.pull()
+    assert not host.primary()                                 # a standby never takes over alone
+
+
+def test_a_dropped_link_voids_the_lease_until_floorbit_says_it_again(setup):
+    host, hosted, agent, _lines = setup
+    agent.last_contact = time.time()
+    hosted.ha, hosted.etag = lease(True), "e1"
+    host.pull()
+    agent.dropped_at = time.monotonic() + 0.001
+    time.sleep(0.002)
+    assert host.primary() and not host.may_login()
+    host.pull()                                               # 304: heard again after the drop
+    assert host.may_login()
+
+
+def test_alone_in_its_group_it_always_polls_and_logs_in(setup):
+    host, hosted, agent, _lines = setup
+    hosted.ha, hosted.etag = lease(True, members=1), "e1"
+    host.pull()
+    agent.last_contact = 0
+    assert host.primary() and host.may_login()
+
+
+def test_an_older_floorbit_sends_no_lease(setup):
+    host, hosted, agent, _lines = setup
+    host.pull()
+    assert host.lease is None and host.primary() and "lease" not in agent.report()
+    for bad in ({"lease": "yes"}, {"lease": {"primary": "yes"}}):
+        hosted.ha, hosted.etag = bad, f"e-{bad!r}"
+        host.pull()
+        assert host.lease is None
 
 
 # ── trying to break it ──────────────────────────────────────────────────────────────────

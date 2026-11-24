@@ -192,6 +192,31 @@ A device down or back shows after two status polls in a row: the lab's Floorbit 
 (`STATUS_MONITOR_INTERVAL`), an event's every 60 s by default, so there it takes up to about three
 minutes.
 
+### High availability: failover times
+
+[`lab/ha_drill.py`](../../lab/ha_drill.py) times what the crew notices when one of the two agents
+goes away (Floorbit issue #1405). It runs on the machine that runs the lab, since it stops and
+starts the containers, and needs a Floorbit with the lease (FLOORBIT_REF after Floorbit #1405):
+
+```sh
+docker compose -f lab/compose.yml up -d --wait
+python3 lab/ha_drill.py --report ha-drill.md --json ha-drill.json
+```
+
+| Step | What it does | Checked (budget) |
+| --- | --- | --- |
+| the primary is killed | `docker compose kill` (the machine dies) | the other agent is primary on the Local agents page (30 s), a seat lookup answers (45 s), new syslog arrives (60 s), the other agent's front door answers (5 s) |
+| it comes back | `start` | it reconnects and does **not** take the lease back for a minute |
+| the standby stops for 30 s | `stop`, `start` | the primary stays where it is |
+| the hosted Floorbit is away for 60 s | `stop floorbit`, `start` | both agents reconnect, nobody changes role |
+| the primary is stopped cleanly | `stop` | the other agent is primary, lookups answer |
+
+Through every step it samples the group twice a second, and it fails if the group ever shows two
+primaries. The report is one Markdown table of the measured seconds. VRRP's own times (a VIP moving
+in 1 to 4 s) come from `sudo python scripts/vrrp_check.py` ([docs/vrrp.md](../vrrp.md)): the lab's
+agents share one Docker network without VRRP, so the drill measures Floorbit's lease and reaches
+each agent's front door at its own address, as the "both addresses in DNS" setup does.
+
 ## Telemetry
 
 Setup turns on Floorbit's Telemetry plugin and sets every lab device up for it in the inventory, as

@@ -33,6 +33,10 @@ PULL_EVERY = 60
 # The hosted side's word in a split brain (docs/vrrp.md) counts this long after it was last heard;
 # with the uplink gone longer, VRRP alone decides again.
 HA_HINT_FRESH = 3 * PULL_EVERY
+# Floorbit's lease (who of a group polls and logs in, Floorbit's agent_ha.py) holds while Floorbit
+# answered this recently and the link didn't drop since it was given: it hands the lease to another
+# agent as soon as this one's link closes, so holding on longer would be the second login.
+LEASE_HOLD = 30
 PULL_UNSUPPORTED = 600     # a hosted Floorbit without agent plugins: ask again this rarely
 SEND_RETRY = 10
 # A plugin thread that raises is started again, waiting longer each time (5 s, 10 s, ... up to
@@ -154,7 +158,7 @@ class AgentContext:
 
     def may_login(self, device, credential, rev=None):
         # A standby leaves logins to the primary: two agents never try the same one (lockouts).
-        return self.primary() and self.auth.may_login(device, credential, rev)
+        return self.host.may_login() and self.auth.may_login(device, credential, rev)
 
     def gauge(self, name, value):
         self.health_.gauge(name, value)
@@ -472,6 +476,9 @@ class PluginHost:
         self.stand_by_for = None  # the agent the hosted side says polls while VRRP is split
         self._ha_heard = None     # when the hosted side last said so (monotonic)
         self._yielding = False    # for the log: standing by now
+        self.lease = None         # {"primary", "members"} from Floorbit; None: it gives none (older)
+        self._lease_heard = None  # when (monotonic)
+        self._was_primary = None  # for the log
 
     # config -------------------------------------------------------------------------------
     def pull(self):
@@ -488,13 +495,17 @@ class PluginHost:
             return False
         self.supported = True
         if resp.status_code == 304:
-            self._ha_heard = time.monotonic()     # the etag covers the hint: still as it was
+            # The etag covers the hint and the lease: still as they were.
+            self._ha_heard = time.monotonic()
+            if self.lease is not None:
+                self._lease_heard = self._ha_heard
             return True
         body = self.agent._check(resp)
         ha = body.get('ha') if isinstance(body.get('ha'), dict) else {}
         other = ha.get('stand_by_for')
         self.stand_by_for = other if isinstance(other, str) and other else None
         self._ha_heard = time.monotonic()
+        self.take_lease(ha.get('lease'), self._ha_heard)
         if isinstance(body.get('agent'), dict):
             # Before apply: a plugin started now reads the settings (Telegraf's port, TLS) it brings.
             self.agent.take_hosted(body['agent'])
@@ -609,7 +620,60 @@ class PluginHost:
         self._reload.set()
         return {'ok': True}
 
+    def take_lease(self, raw, now=None):
+        """Floorbit's word on who of this agent's group polls and logs in (its agent_ha.lease_for)."""
+        if not isinstance(raw, dict) or not isinstance(raw.get('primary'), bool):
+            self.lease = None
+            return
+        members = raw.get('members')
+        before = self.lease
+        self.lease = {'primary': raw['primary'],
+                      'members': members if isinstance(members, int) and not isinstance(members, bool) else 2}
+        self._lease_heard = time.monotonic() if now is None else now
+        if before is None or before['primary'] != self.lease['primary']:
+            self.report_soon()          # Floorbit keeps the lease where the reports say it is
+
+    def _lease_fresh(self, now):
+        heard = self._lease_heard
+        return (heard is not None and heard > getattr(self.agent, 'dropped_at', 0)
+                and time.time() - (getattr(self.agent, 'last_contact', 0) or 0) < LEASE_HOLD
+                and now - heard < HA_HINT_FRESH)
+
     def primary(self, now=None):
+        now = time.monotonic() if now is None else now
+        lease = self.lease
+        if lease is not None:
+            if lease['members'] <= 1:
+                return self._note_primary(True)      # alone in its group: always, uplink or not
+            if self._lease_fresh(now) or not self.vrrp:
+                # Floorbit out of reach: each keeps its last role, and a standby never takes over
+                # on its own. Polling twice for a while costs only load (Floorbit keeps a point
+                # once); logins wait for a fresh lease (may_login), as they could lock an account.
+                return self._note_primary(lease['primary'])
+        return self._vrrp_primary(now)
+
+    def may_login(self, now=None):
+        """Logins to devices: the primary only, and with Floorbit's lease only while it is fresh,
+        since Floorbit may have given it to another agent while this one couldn't hear it."""
+        now = time.monotonic() if now is None else now
+        if not self.primary(now):
+            return False
+        lease = self.lease
+        return lease is None or lease['members'] <= 1 or self._lease_fresh(now) or bool(self.vrrp)
+
+    def _note_primary(self, primary):
+        if primary != self._was_primary:
+            if self._was_primary is not None or not primary:
+                self.log('[agent] Floorbit made this agent its group\'s primary: it polls and logs in' if primary
+                         else '[agent] another agent of this group polls and logs in; this one stands by')
+            self._was_primary = primary
+        return primary
+
+    def lease_held(self):
+        """For the report: True or False once Floorbit gives leases, else None."""
+        return None if self.lease is None else self.primary()
+
+    def _vrrp_primary(self, now):
         vrrp = self.vrrp
         if not vrrp:
             return True
@@ -619,7 +683,6 @@ class PluginHost:
             return False
         # Split brain: the agents can't hear each other's VRRP and both hold the first VIP. The hosted
         # side hears both and names one; the other stands by, so no login is tried twice.
-        now = time.monotonic() if now is None else now
         told = (self.stand_by_for is not None and self._ha_heard is not None
                 and now - self._ha_heard < HA_HINT_FRESH)
         self._note_yield(told)

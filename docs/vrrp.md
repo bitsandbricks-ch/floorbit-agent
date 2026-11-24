@@ -22,13 +22,22 @@ must stay up while the uplink is away.
 
 ## Primary and standby
 
-The agent holding the first VIP is its hall's **primary**. Agent plugins ask `ctx.primary()`
-before they poll a device or log in to one, and a standby's `may_login` always says no: two agents
-never poll the same switch or try the same login, so no account is locked twice as fast. Listeners
-(syslog, NetFlow, Telegraf) run on every agent, and the hosted Floorbit keeps a line that reached
-both once. When the primary goes, the standby takes the first VIP and starts polling within
-seconds. The hosted Local agents page shows each hall's primary, the VIPs each agent holds, and
-whether failover is ready. Without VRRP every agent counts as primary.
+Who polls and logs in is no longer VRRP's call: the hosted Floorbit picks one agent per group (the
+agents with the same tags) and hands it a lease with the plugin config (Floorbit's docs/agent.md,
+"Two agents for the same devices"). Agent plugins ask `ctx.primary()` before they poll a device,
+and `may_login` follows it, so two agents never poll the same switch or try the same login. VRRP
+moves the addresses only: the check-in name, syslog, NetFlow and traps keep reaching an agent when
+one machine goes down. When the primary's link closes, Floorbit gives the lease to the next agent
+of the group within a second.
+
+Without the hosted Floorbit, each agent keeps its last role and a standby never takes over on its
+own. The primary keeps polling, but tries no login until it hears Floorbit again: Floorbit may have
+moved the lease to an agent it could still reach. An agent that lost its link gives up the lease
+until Floorbit says it again. An agent alone in its group is always primary.
+
+A hosted Floorbit from before the lease sends none: then the agent holding the first VIP is its
+hall's primary, as it was, and without VRRP every agent counts as primary. The rest of this section
+is about that case.
 
 ### Split brain
 
