@@ -40,6 +40,14 @@ def test_lldp_neighbours_go_to_the_plugin(monkeypatch):
     assert registry.calls == [('librenms', 'neighbours', ('sw-a-01',))]
 
 
+def test_librenms_open_alerts_go_to_the_plugin(monkeypatch):
+    # Floorbit clears an alert whose recovery got lost once LibreNMS no longer lists it (#951).
+    registry = Registry()
+    monkeypatch.setattr(sources, 'registry', registry)
+    floorbit_agent.local_executor(flask.Flask('test'))('active_alerts', [])
+    assert registry.calls == [('librenms', 'active_alerts', ())]
+
+
 def test_device_facts_go_to_the_monitoring_plugins(monkeypatch):
     class Spec:
         id = name = 'librenms'
