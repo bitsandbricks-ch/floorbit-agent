@@ -91,7 +91,7 @@ def plugins(fb, args):
     status, body = fb.call('PATCH', '/api/settings', settings)
     if status != 200:
         raise SystemExit(f'Setting up the plugins failed: {status} {body}')
-    listeners = ['syslog-relay', 'netflow-relay', 'front-door']
+    listeners = ['syslog-relay', 'netflow-relay', 'front-door', 'librenms-alerts']
     for pid in ['librenms', 'syslog-relay', 'netflow-relay']:     # the front door is on already
         status, body = fb.call('PUT', f'/api/settings/plugins/{pid}', {'enabled': True})
         if status != 200:
