@@ -87,6 +87,16 @@ jobs:
           pip install --quiet actionlint-py
           actionlint -color
 
+  changelog:
+    # Entries live in changelog.d/ fragments (one per PR); this checks they parse.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 scripts/changelog.py check
+
   lab:
     # The hardware-free test lab (docs/lab/README.md): Floorbit, two agents, the lab LibreNMS and the
     # simulated switches, end to end; then agent A goes away and agent B has to carry on.
@@ -175,7 +185,7 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [python, vrrp, node, workflows, lab]
+    needs: [python, vrrp, node, workflows, changelog, lab]
     runs-on: ubuntu-24.04
     steps:
       - env:

@@ -7,6 +7,10 @@
 #   mason doctor floorbit-agent         settings, rulesets and files against the defaults
 #
 # Releases are immutable and made by the workflow, so push only the tag.
+[handbook]
+profile = "agent"
+version = "v1"
+
 [release]
 version = "VERSION"          # or pyproject.toml, package.json, plugin.yaml, Cargo.toml
 changelog = ["CHANGELOG.md"]
