@@ -50,7 +50,8 @@ REPORT_EVERY = 30         # seconds between reports to the hosted side (its Loca
 MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer instead of piling up
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
-           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'device_facts', 'dns_probe', 'tcp_probe', 'plugin',
+           'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'device_facts', 'active_alerts', 'dns_probe',
+           'tcp_probe', 'plugin',
            'plugins_reload',
            'switch_call', 'shell_open', 'shell_io', 'shell_close', 'plugin_test')
 # Pools bigger than WORKERS: a switch command runs on many switches at once, and each open terminal
