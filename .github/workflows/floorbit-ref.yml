@@ -53,6 +53,7 @@ jobs:
                 fi
               done | sort
           }
+          # shellcheck disable=SC2016  # the backticks are Markdown for the PR, not an expansion
           new=$(comm -13 <(agent_plugins "$PINNED") <(agent_plugins "$MASTER") | sed 's/^/`/; s/$/`/' | paste -sd, - | sed 's/,/, /g')
           echo "new=${new:-none}" >> "$GITHUB_OUTPUT"
       - name: Open or update the pull request
