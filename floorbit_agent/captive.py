@@ -1,6 +1,6 @@
 """The Captive Portal API (RFC 8908) for the event network (Floorbit issue #473).
 
-With the plugin "Check-in note on phones" turned on in Floorbit, the agent answers
+The agent's front door (front_door.py, the plugin "Front door for attendees") answers
 ``GET /.well-known/captive-portal`` with ``application/captive+json``. The DHCP server hands out the
 URL of that endpoint in option 114 (RFC 8910). Phones and laptops then ask it, and while the answer
 says ``"captive": true`` they show a quiet "sign in to network" note that opens ``user-portal-url``.
@@ -18,9 +18,9 @@ agent sees the laptop's own IP, reports it with the code over its key (``say_hel
 browser back to Floorbit. ``back`` must be on the Floorbit the agent talks to; anything else gets a
 short page instead of a redirect, so this is no open redirect.
 
-RFC 8908 wants HTTPS for this URL, so serve it behind the event's reverse proxy with a certificate.
-Put that proxy's address in the plugin's trusted proxies so the client's own IP is taken from
-``X-Forwarded-For``.
+RFC 8908 wants HTTPS for this URL: give the agent a certificate (FLOORBIT_AGENT_TLS_CERT and _KEY),
+or put a reverse proxy in front and its address in the plugin's trusted proxies, so the client's own
+IP is taken from ``X-Forwarded-For``.
 """
 import html
 import ipaddress
@@ -29,10 +29,9 @@ import re
 import threading
 import time
 from collections import deque
-from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlsplit
 
-from . import http_limits, logs
+from . import logs
 
 PATH = '/.well-known/captive-portal'
 HELLO_PATH = re.compile(r'^/floorbit/hello/([A-Za-z0-9_-]{16,64})\Z')
@@ -52,7 +51,8 @@ def _ip(text):
 
 
 class Captive:
-    def __init__(self, ask, portal_url='', proxies=(), log=logs.say, say_hello=None, floorbit_url=''):
+    def __init__(self, ask, portal_url='', proxies=(), log=logs.say, say_hello=None, floorbit_url='', note=True):
+        self.note = note                     # answer the phone note at all (the hello works either way)
         self.ask = ask                       # () -> {"done": [ip], "portal_url"}; RuntimeError: off there
         self.say_hello = say_hello           # (code, ip) -> None; raises when the hosted side refuses
         self.floorbit_url = floorbit_url.rstrip('/')
@@ -155,56 +155,20 @@ class Captive:
     def stop(self):
         self._stop.set()
 
-
-def serve(captive, address, log=logs.say):
-    """Start the endpoint and the refresh in threads; returns the server, or None when off.
-    Raises ValueError or OSError when the address is wrong or taken."""
-    address = (address or '').strip()
-    if not address or address.lower() == 'off':
+    def route(self, path, query, peer, forwarded=''):
+        """What the front door answers for the note and the hello: ``(status, headers, body, kind)``,
+        or None for a path that isn't ours."""
+        hello = HELLO_PATH.match(path)
+        if hello:
+            ip = self.client_ip(peer, forwarded)
+            back = (parse_qs(query).get('back') or [''])[0]
+            status, location, text = self.hello(hello.group(1), ip, back)
+            if location:
+                return status, {'Location': location}, b'', 'text/plain'
+            page = f'<!doctype html><meta charset="utf-8"><title>Floorbit</title><p>{html.escape(text)}</p>\n'
+            return status, {}, page.encode(), 'text/html; charset=utf-8'
+        if path == PATH and self.note:
+            body = (json.dumps(self.answer(self.client_ip(peer, forwarded))) + '\n').encode()
+            # RFC 8908: per client, never shared
+            return 200, {'Cache-Control': 'private, no-store'}, body, KIND
         return None
-    host, _, port = address.rpartition(':')
-    port = int(port)
-
-    class Handler(BaseHTTPRequestHandler):
-        timeout = http_limits.IDLE_SECONDS     # a phone that opens and says nothing lets go
-
-        def do_GET(self):  # the name http.server asks for
-            path, _, query = self.path.partition('?')
-            hello = HELLO_PATH.match(path)
-            if hello:
-                ip = captive.client_ip(self.client_address[0], self.headers.get('X-Forwarded-For', ''))
-                back = (parse_qs(query).get('back') or [''])[0]
-                status, location, text = captive.hello(hello.group(1), ip, back)
-                if location:
-                    self.send_response(status)
-                    self.send_header('Location', location)
-                    self.send_header('Cache-Control', 'no-store')
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
-                    return
-                page = f'<!doctype html><meta charset="utf-8"><title>Floorbit</title><p>{html.escape(text)}</p>\n'
-                self._send(status, page, 'text/html; charset=utf-8', raw=True)
-                return
-            if path != PATH:
-                self._send(404, {'error': 'not found'}, 'application/json')
-                return
-            ip = captive.client_ip(self.client_address[0], self.headers.get('X-Forwarded-For', ''))
-            self._send(200, captive.answer(ip), KIND)
-
-        def _send(self, status, body, kind, raw=False):
-            data = body.encode() if raw else (json.dumps(body) + '\n').encode()
-            self.send_response(status)
-            self.send_header('Content-Type', kind)
-            self.send_header('Content-Length', str(len(data)))
-            self.send_header('Cache-Control', 'private, no-store')   # RFC 8908: per client, never shared
-            self.end_headers()
-            self.wfile.write(data)
-
-        def log_message(self, *args):   # every phone asks: not news
-            pass
-
-    server = http_limits.LimitedHTTPServer((host or '0.0.0.0', port), Handler, shared=captive.proxies)
-    threading.Thread(target=server.serve_forever, name='agent-captive', daemon=True).start()
-    threading.Thread(target=captive.run, name='agent-captive-refresh', daemon=True).start()
-    log(f'[captive] Captive Portal API on http://{address}{PATH}')
-    return server

@@ -6,9 +6,27 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Every request to Floorbit is signed with the agent's own key (bitsandbricks-ch/floorbit#1178): made on the agent (`tls/identity-key.pem`), enrolled at the first hello, where Floorbit's agents CA signs a client certificate and pins the key, and renewed 30 days before the end. The WebSocket link and the front door's requests are signed too. The agent signs with Floorbit's time (from its answers' `Date`), and a refused signature is retried, never fatal. Needs a Floorbit with bitsandbricks-ch/floorbit#1178.
+
+### Changed
+
+- One port for attendees: the front door answers the check-in note on phones (`/.well-known/captive-portal`) and the crew's seat walk-through (`/floorbit/hello/<code>`) itself, so `/` on the agent is the check-in page and port 8908 is gone. `compose.yml` publishes 443 and 80; with a certificate, port 80 sends browsers on to HTTPS. Built on Floorbit #986, where the front door is on by default.
+- The agent learns where browsers in the hall reach it and reports it for the seat walk-through: `FLOORBIT_AGENT_LAN_URL` is gone (Floorbit #999).
+
+### Fixed
+
+- Security: a crew member who signed in through the front door no longer signs in every attendee behind it. The front door kept the hosted side's cookies for everyone (#65).
+- Pages through the front door no longer go blank on a second visit: answers without a body (304 for a cached file) no longer carry an empty chunk that broke the next answer on the connection (#66).
+- Browsers that drop a connection (preconnects, a closed tab) no longer print a `ConnectionResetError` stack trace. HTTPS on the plain port, or plain HTTP on the HTTPS port, gives one log line now and then that says which address to open (#62).
+- The front door and the plugin listeners now cap connections per client like the other listeners, and do the TLS handshake in the request's thread, so a slow client can't hold up the listener.
+
 ### Added
 
 - The test lab has a Catalyst 9800-CL wireless controller: the replay streams its three access points over MDT (capwap-data, radio-oper-data, rrm-measurement) and the end-to-end test checks they reach the Wi-Fi view through the agent, counts only, with clients over time.
+- Takes the tenant's Let's Encrypt certificate from Floorbit (Floorbit #1026): with a domain set on the hosted Floorbit, the HTTPS listeners serve it to browsers that ask for `<tenant>.agent.<domain>`, and the CA's certificate to everyone else (by IP, by another name, no name, or once the Let's Encrypt one has expired). Its shared key comes encrypted to the agent's own key, which still never leaves the machine.
+- `compose.yml` publishes 1163-1170/udp: a trap listener for each further SNMPv3 trap user (Floorbit #975), and Floorbit shows each device which port it sends to.
 - Answers `device_facts` (Floorbit #966): what a device is (VLANs, networks, transceivers, ...) for discovery, from telemetry first and LibreNMS for the rest, so discovery works with LibreNMS alone.
 - Drills in the test lab (`lab/e2e/test_drills.py`): a firewall and an access switch die and come back, LibreNMS goes away, the hosted Floorbit goes away and comes back; CI runs each. The lab plans a seat range per block on its firewalls.
 - The test lab's switches answer SSH as Cisco IOS and NX-OS (`lab/switch_ssh`), and the lab stores a switch login in Floorbit: the end-to-end tests run the switch command templates, a config backup, port shut, turn on and bounce, Clear port counters and the browser terminal through the agents. A shut port changes the switch's SNMP, syslog, traps and running config, as at the event.
@@ -59,6 +77,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
+- Test lab: the two Telegraf polling tests set Telemetry's "Who polls the switches" to Telemetry while they run, and back to auto afterwards: Floorbit #945 leaves ports and ARP/MAC tables to LibreNMS when it is on, as it is in the lab.
 - **Plugins are set up only in Floorbit.** The agent no longer reads `LIBRENMS_URL`, `NETBOX_URL`, `FLOORBIT_PLUGIN_*`, `FLOORBIT_AGENT_PLUGINS` or its relays (`FLOORBIT_AGENT_SYSLOG_PORT`, `_FLOWS_PORT`, `_CAPTIVE`, `_FRONT_DOOR` and their siblings) from its environment: syslog, NetFlow, the check-in note and the attendee front door run as the plugins Floorbit turns on for it. The first time it gets through after the update, it hands what those variables set to the hosted Floorbit once, which takes it over for each plugin not set up there yet and logs it in its audit log; the agent says which variables to remove. Update Floorbit first. The agent's env keeps only its own settings (URL and key, buffer, metrics, VRRP, allowed actions, plugin updates, TLS certificate).
 - Each plugin's disk buffer follows `FLOORBIT_AGENT_BUFFER_MAX_MB` and `FLOORBIT_AGENT_BUFFER_MAX_HOURS` (2 GB and 24 hours each by default); a value that is no size keeps the default instead of turning the buffer off.
 - `/metrics`: syslog, NetFlow and captive numbers are now the plugins' own, `floorbit_agent_plugin_<name>{plugin="<id>"}`, instead of `floorbit_agent_syslog_*`, `floorbit_agent_flows_*` and `floorbit_agent_captive_*`. The Grafana dashboard follows.
@@ -103,3 +122,7 @@ All notable changes to this project are listed here. The format follows
 - Game server queries no longer go to link-local addresses (`169.254.169.254`, where clouds keep their metadata service): Python counts them as private, so they passed the private-only check.
 - Game queries and service probes check an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) as the IPv4 address it reaches, also on Python releases that don't do so themselves.
 - Game queries and service probes also check the IPv4 address inside NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) and 6to4 (`2002::/16`) addresses: Python calls `64:ff9b:1::a9fe:a9fe` private, but on a NAT64 network it is the metadata service at `169.254.169.254`. Probes now refuse this machine and link-local addresses even when `FLOORBIT_AGENT_PROBE_NETS` would allow them.
+### Changed
+
+- The test lab sets telemetry with the namespaced property names (`telemetry.drivers`, `telemetry.snmp.vlans`, ...), as Floorbit #965 renamed them.
+

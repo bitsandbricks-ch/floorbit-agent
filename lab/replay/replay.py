@@ -14,6 +14,9 @@ Where things go (env, comma-separated host:port lists; empty: that stream is off
   LAB_SYSLOG_TARGETS   UDP syslog, e.g. agent-a:5514,agent-b:5514 (every target gets every
                        line, as switches with two logging hosts do: the hosted side keeps one)
   LAB_TRAP_TARGETS     SNMPv2c traps (linkDown/linkUp), e.g. telegraf:1162
+  LAB_TRAP_V3          one device's own SNMPv3 trap user (floorbit#975), e.g.
+                       access-a1=lab-trap:SHA:auth-pass:AES:priv-pass@agent-a:1162: that device
+                       also sends a v3 trap and a v2c one to that listener, each round
   LAB_FLOW_TARGETS     NetFlow v9, e.g. agent-a:2055
   LAB_LANCACHE_DIR     a folder to append logs/access.log and dns/query.log to
   LAB_PUSH_URL         Influx line protocol from an OPNsense running Telegraf, POSTed here
@@ -151,6 +154,43 @@ def send_traps(traps, dests):
                             f'1.3.6.1.2.1.31.1.1.1.1.{if_index}', 's', name,
                             '1.3.6.1.6.3.18.1.3.0', 'a', sw.ip],
                            check=False, capture_output=True, timeout=10)
+
+
+def v3_spec():
+    """(device, user, auth, auth pass, priv, priv pass, (host, port)) from LAB_TRAP_V3, or None."""
+    text = os.environ.get('LAB_TRAP_V3', '').strip()
+    if not text:
+        return None
+    device, _, rest = text.partition('=')
+    login, _, dest = rest.rpartition('@')
+    user, auth, auth_pass, priv, priv_pass = login.split(':')
+    host, _, port = dest.rpartition(':')
+    return device, user, auth, auth_pass, priv, priv_pass, (host, int(port))
+
+
+# Ports no poll ever reports, so a test can tell these traps from everything else.
+V3_PORT = (4242, 'v3-trap')
+V2C_ON_V3_PORT = (4243, 'v2c-on-v3')
+
+
+def _link_down(if_index, name, ip):
+    return ['1.3.6.1.6.3.1.1.5.3', f'1.3.6.1.2.1.2.2.1.1.{if_index}', 'i', str(if_index),
+            f'1.3.6.1.2.1.2.2.1.8.{if_index}', 'i', '2', f'1.3.6.1.2.1.31.1.1.1.1.{if_index}', 's', name,
+            '1.3.6.1.6.3.18.1.3.0', 'a', ip]
+
+
+def send_v3_traps(sw, spec):
+    """A linkDown as the device's SNMPv3 trap user, and a v2c one to the same listener: a v3
+    listener still takes v1 and v2c (floorbit telemetry/telegraf.py)."""
+    _device, user, auth, auth_pass, priv, priv_pass, (host, port) = spec
+    # A trap's engine is the sender's own: one per device, fixed, so the listener's keys hold.
+    engine = '0x80001f8880' + ''.join(f'{int(o):02x}' for o in sw.ip.split('.'))
+    v3 = ['snmptrap', '-v3', '-e', engine, '-u', user, '-l', 'authPriv', '-a', auth, '-A', auth_pass,
+          '-x', priv, '-X', priv_pass, f'{host}:{port}', '', *_link_down(*V3_PORT, sw.ip)]
+    v2c = ['snmptrap', '-v2c', '-c', 'public', f'{host}:{port}', '', *_link_down(*V2C_ON_V3_PORT, sw.ip)]
+    for cmd in (v3, v2c):
+        subprocess.run(cmd, check=False, capture_output=True, timeout=10)
+    return 2
 
 
 # --- NetFlow v9 ------------------------------------------------------------------------------
@@ -330,6 +370,8 @@ def one_round(rnd, now, seq=0, device=None, log=print):
         traps = [t for t in trap_round(rnd) if not device or t[0] is me]
         send_traps(traps, dests)
         sent['traps'] = len(traps)
+    if (spec := v3_spec()) and me is not None and me.name == spec[0]:
+        sent['v3 traps'] = send_v3_traps(me, spec)
     if (dests := targets('LAB_FLOW_TARGETS')) and (not device or me is LAB.core):
         packets = netflow_packets(rnd, now, seq)
         send_flows(packets, dests)

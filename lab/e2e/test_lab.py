@@ -128,8 +128,9 @@ def test_the_crew_walk_through_finds_each_seat_port(fb, lab):
         assert got['ok'] and got['found'] == {'switch': seat.switch, 'port': short(seat.port)}, got
         assert got['ip'] == seat.ip and got['mac'] == seat.mac and got['how'] == 'monitoring'
         previous = got['found']
-    block = next(b['id'] for b in fb.get('/api/seat-blocks') if b['name'] == 'B')
-    kept = {s['seat']: s['port'] for s in fb.get(f'/api/seat-walk?block={block}')['seats']}
+    # A walker takes a row or a few, not a whole block: block B's rows.
+    rows = [o['value'] for o in fb.get('/api/options/rows')['options'] if o.get('group') == 'B']
+    kept = {s['seat']: s['port'] for s in fb.get(f"/api/seat-walk?rows={','.join(rows)}")['seats']}
     assert all(kept[s.label]['port'] == short(s.port) and kept[s.label]['source'] == 'walk' for s in seats)
     # The last seat's port again (as an old MAC table would say) is never taken for the next seat.
     stale = fb.post('/api/seat-walk/locate', {'seat': 'B-20', 'previous': previous,
@@ -169,7 +170,9 @@ def test_syslog_from_every_switch_kind_arrives_once(fb, lab):
         kinds = ['%LINK-3-UPDOWN', '%ETHPORT-5-SPEED', 'filterlog' if 'filterlog' in str(lines) else None]
         return body if all(k is None or k in text or k in str(lines) for k in kinds) and lines else None
     body = eventually(arrived, timeout=120, what='syslog from the switches')
-    assert body['status']['counts']['duplicates'] > 0, 'both agents should have sent every line'
+    # Without Docker only agent A takes syslog (both can't have the port): nothing to keep once.
+    if int(os.environ.get('LAB_SYSLOG_AGENTS', '2')) > 1:
+        assert body['status']['counts']['duplicates'] > 0, 'both agents should have sent every line'
     seen = [(line.get('ts'), line.get('message')) for line in body['lines']]
     assert len(seen) == len(set(seen)), 'a line was kept twice'
 
@@ -185,9 +188,9 @@ def test_netflow_summary_counts_the_seats(fb, lab):
 
 
 def test_captive_portal_note_until_checked_in(fb, lab):
-    url = os.environ.get('LAB_CAPTIVE')
+    url = os.environ.get('LAB_FRONT_DOOR')
     if not url:
-        pytest.skip('LAB_CAPTIVE is not set')
+        pytest.skip('LAB_FRONT_DOOR is not set')
     done, waiting = lab.seat('A-7'), lab.seat('A-8')
 
     def ask(seat):
@@ -292,6 +295,36 @@ def test_telegraf_takes_the_switches_traps(fb, lab):
         trouble = trap_trouble()
         assert not trouble, f'traps are dropped: {trouble}'
         time.sleep(5)
+
+
+@pytest.mark.skipif(os.environ.get('LAB_TELEGRAF') == '0' or not os.environ.get('LAB_TRAP_V3'),
+                    reason='no Telegraf or no SNMPv3 trap user in this lab')
+@pytest.mark.usefixtures('telemetry_polls')
+def test_a_devices_own_snmpv3_trap_user_gets_its_listener(fb, lab):
+    """access-a1 sends traps as its own SNMPv3 user (floorbit#975). It is the lab's only v3 trap user,
+    so Floorbit gives it the usual listener (a further user would get the next one), and the agent's
+    Telegraf takes both its v3 trap and a v2c one sent to the same port. Each trap names a port no
+    poll reports (replay.py V3_PORT, V2C_ON_V3_PORT), so access-a1 ends up with two ports more than
+    its twin access-b1. Telemetry answers for the switches meanwhile (telemetry_polls)."""
+    device, _, rest = os.environ['LAB_TRAP_V3'].partition('=')
+    port = int(rest.rpartition(':')[2])
+    ids = {d['name']: d['id'] for d in fb.get('/api/inventory')['devices']}
+    target = fb.get(f'/api/telemetry/devices/{ids[device]}')['target']
+    assert target['trap_port'] == port and target['trap_user'], target
+    # With LibreNMS answering (who polls: auto), the device list is LibreNMS's, without these counts.
+    twin = next(sw.name for sw in lab.access if sw.name != device)
+
+    def both_traps_in():
+        rows = fb.get('/api/telemetry/devices')['devices']
+        mine, theirs = (rows.get(device) or {}).get('ports'), (rows.get(twin) or {}).get('ports')
+        assert mine and theirs, f'no port counts yet: {device} {mine}, {twin} {theirs}'
+        assert mine - theirs == 2, f'{device} has {mine} ports, {twin} {theirs}'
+        return True
+    eventually(both_traps_in, timeout=180, every=5,
+               what=f'the v3 and the v2c trap from {device} on port {port}')
+    trouble = [p for p in ((fb.get('/api/telemetry/devices')['devices'].get(device) or {}).get('problems') or [])
+               if p.get('driver') == 'traps']
+    assert not trouble, trouble
 
 
 def test_a_firewalls_own_telegraf_lands_on_the_firewall(fb, lab):

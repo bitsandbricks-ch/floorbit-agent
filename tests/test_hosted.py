@@ -15,12 +15,18 @@ class Hosted:
         self.posts = []
         self.key_status = 200
         self.cert_status = 200
+        self.public_status = 200
+        self.public_name = "club.agent.example.com"
 
     def post(self, url, data=None, headers=None, timeout=None):
         self.posts.append((url, headers, json.loads(data) if data else None))
         if url.endswith("/api/agent/v1/key"):
             return Resp(self.key_status, {"key": "fba_0a1b2c3d_" + "n" * 30} if self.key_status == 200 else
                         {"error": "No new key was asked for this agent."})
+        if url.endswith("/api/agent/v1/cert") and json.loads(data).get("public"):
+            if self.public_status != 200:
+                return Resp(self.public_status, {"error": "The agents' Let's Encrypt certificate isn't there yet."})
+            return Resp(200, public_bundle(json.loads(data)["csr"], self.public_name))
         if url.endswith("/api/agent/v1/cert"):
             if self.cert_status != 200:
                 return Resp(self.cert_status, {"error": "List the names first."})
@@ -29,6 +35,42 @@ class Hosted:
 
 
 CA = {}
+
+
+def public_bundle(csr_pem, name):
+    """A stand-in for floorbit/public_cert.py: a certificate for ``name`` and its key, sealed to the
+    key in the agent's request."""
+    import base64
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.datetime.now(datetime.UTC)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    cert = (x509.CertificateBuilder().subject_name(subject)
+            .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Fake Let's Encrypt")]))
+            .public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(now)
+            .not_valid_after(now + datetime.timedelta(days=90))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(name)]), critical=False)
+            .sign(key, hashes.SHA256()))
+    key_pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                serialization.NoEncryption())
+    agent_pub = x509.load_pem_x509_csr(csr_pem.encode()).public_key()
+    eph = ec.generate_private_key(ec.SECP256R1())
+    epk = eph.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    secret = HKDF(algorithm=hashes.SHA256(), length=32, salt=epk, info=hosted.SEAL_INFO).derive(
+        eph.exchange(ec.ECDH(), agent_pub))
+    nonce = os.urandom(12)
+    data = AESGCM(secret).encrypt(nonce, key_pem, hosted.SEAL_INFO)
+    enc = base64.b64encode
+    return {"name": name, "cert": cert.public_bytes(serialization.Encoding.PEM).decode(),
+            "key": {"alg": hosted.SEAL_ALG, "epk": enc(epk).decode(), "nonce": enc(nonce).decode(),
+                    "data": enc(data).decode()}}
 
 
 def sign(csr_pem):
@@ -69,26 +111,26 @@ def agent(tmp_path):
 def test_settings_from_floorbit_go_in_but_the_env_wins(tmp_path):
     env = {"FLOORBIT_AGENT_METRICS": "127.0.0.1:9600", "FLOORBIT_AGENT_ALLOW_ACTIONS": "lancache.*"}
     s = hosted.Settings(str(tmp_path), env, log=lambda *_: None)
-    assert s.take({"metrics": "0.0.0.0:9700", "lan_url": "http://192.0.2.10:8908", "vrrp_vips": ["192.0.2.10/24"],
+    assert s.take({"metrics": "0.0.0.0:9700", "log_level": "debug", "vrrp_vips": ["192.0.2.10/24"],
                    "metrics_token": "example-token", "allow_actions": "*"})
     assert env["FLOORBIT_AGENT_METRICS"] == "127.0.0.1:9600"                  # the hall's own
-    assert env["FLOORBIT_AGENT_LAN_URL"] == "http://192.0.2.10:8908"
+    assert env["FLOORBIT_AGENT_LOG_LEVEL"] == "debug"
     assert env["FLOORBIT_AGENT_VRRP_VIPS"] == "192.0.2.10/24"
     assert env["FLOORBIT_AGENT_ALLOW_ACTIONS"] == "lancache.*"                # never from Floorbit
     got = s.report()
     assert got["values"]["metrics"] == {"source": "env", "value": "127.0.0.1:9600"}
-    assert got["values"]["lan_url"] == {"source": "floorbit", "value": "http://192.0.2.10:8908"}
+    assert got["values"]["log_level"] == {"source": "floorbit", "value": "debug"}
     assert got["values"]["metrics_token"] == {"source": "floorbit", "set": True}
     assert got["values"]["buffer_max_mb"] == {"source": "default"}
     assert got["values"]["FLOORBIT_AGENT_ALLOW_ACTIONS"] == {"source": "env", "value": "lancache.*"}
-    assert got["pending"] == ["metrics_token", "vrrp_vips"]                   # lan_url works at once
+    assert got["pending"] == ["metrics_token", "vrrp_vips"]                   # the log level works at once
     assert "example-token" not in json.dumps(got)
     assert oct(os.stat(tmp_path / hosted.SETTINGS_FILE).st_mode & 0o777) == "0o600"
     # The next start takes them from the file, nothing pending; cleared ones go again.
     env2 = {}
     again = hosted.Settings(str(tmp_path), env2, log=lambda *_: None)
     assert env2["FLOORBIT_AGENT_VRRP_VIPS"] == "192.0.2.10/24" and again.report()["pending"] == []
-    assert not again.take({"metrics": "0.0.0.0:9700", "lan_url": "http://192.0.2.10:8908",
+    assert not again.take({"metrics": "0.0.0.0:9700", "log_level": "debug",
                            "vrrp_vips": ["192.0.2.10/24"], "metrics_token": "example-token"})
     again.take({})
     assert "FLOORBIT_AGENT_VRRP_VIPS" not in env2
@@ -145,6 +187,115 @@ def test_a_certificate_the_hall_set_wins_and_a_refusal_waits(agent, tmp_path):
     assert len(agent.http.posts) == asked                     # not again within CERT_RETRY
 
 
+
+
+def test_the_tenant_s_lets_encrypt_certificate_comes_next_to_the_ca_s_its_key_sealed(agent, tmp_path):
+    env = {}
+    agent.hosted = hosted.Hosted(str(tmp_path), env=env, log=lambda *_: None)
+    restarted = []
+    agent.plugins = type("P", (), {"restart_tls": lambda self: restarted.append(1), "report": lambda self: {}})()
+    # Not there yet: the CA's serves meanwhile.
+    agent.http.public_status = 409
+    ca_block = {"names": ["agent.example.com"], "asked": 0}
+    agent.take_hosted({"settings": {}, "cert": ca_block, "public_cert": {"name": "club.agent.example.com", "asked": 1}})
+    assert [b.get("public") for _, _, b in agent.http.posts] == [None, True]
+    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem") and restarted == [1]
+    assert hosted.PUBLIC_KEY_ENV not in env
+    agent.hosted.cert.public_failed_at = 0
+    agent.http.public_status = 200
+    block = {"name": "club.agent.example.com", "asked": 1}
+    agent.take_hosted({"settings": {}, "cert": ca_block, "public_cert": block})
+    _, _, body = agent.http.posts[-1]
+    assert body["public"] is True and "PRIVATE" not in body["csr"]
+    # Both pairs: the CA's stays, the Let's Encrypt one comes next to it.
+    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem")
+    assert env[hosted.PUBLIC_KEY_ENV].endswith("public-key.pem") and restarted == [1, 1]
+    assert oct(os.stat(env[hosted.PUBLIC_KEY_ENV]).st_mode & 0o777) == "0o600"
+    with open(env[hosted.PUBLIC_KEY_ENV]) as f:
+        assert "BEGIN PRIVATE KEY" in f.read()
+    report = agent.report()["settings"]["cert"]
+    assert report["floorbit_ca"] and report["public"]["names"] == ["club.agent.example.com"]
+    cert = agent.hosted.cert
+    assert not cert.public_wanted(block) and not cert.wanted(ca_block)
+    assert cert.public_wanted({**block, "asked": os.path.getmtime(cert.public_cert_path) + 10})   # renewed
+    # Restarted, it serves both; the domain gone, only the CA's.
+    env2 = {}
+    hosted.Certificate(str(tmp_path), env2)
+    assert env2[hosted.PUBLIC_KEY_ENV].endswith("public-key.pem")
+    assert env2["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem")
+    agent.take_hosted({"settings": {}, "cert": ca_block})
+    assert hosted.PUBLIC_KEY_ENV not in env and not cert.public and restarted == [1, 1, 1]
+    assert env["FLOORBIT_AGENT_TLS_KEY"].endswith("agent-key.pem")
+
+
+def _served(context, name):
+    """The common name of the certificate a TLS server with ``context`` shows a browser asking for
+    ``name`` (None: no SNI)."""
+    import contextlib
+    import ssl
+
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client.check_hostname, client.verify_mode = False, ssl.CERT_NONE
+    c_in, c_out, s_in, s_out = ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO(), ssl.MemoryBIO()
+    c = client.wrap_bio(c_in, c_out, server_hostname=name)
+    s = context.wrap_bio(s_in, s_out, server_side=True)
+    for _ in range(10):
+        for side in (c, s):
+            with contextlib.suppress(ssl.SSLWantReadError):
+                side.do_handshake()
+        s_in.write(c_out.read())
+        c_in.write(s_out.read())
+        if c.version() and s.version():
+            break
+    leaf = x509.load_der_x509_certificate(c.getpeercert(binary_form=True))
+    return leaf.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+
+
+def test_listeners_serve_lets_encrypt_by_its_name_and_the_ca_s_to_the_rest(agent, tmp_path):
+    env = {}
+    agent.hosted = hosted.Hosted(str(tmp_path), env=env, log=lambda *_: None)
+    agent.take_hosted({"settings": {}, "cert": {"names": ["192.0.2.10"]},
+                       "public_cert": {"name": "club.agent.example.com", "asked": 1}})
+    context = hosted.server_context(env)
+    assert _served(context, "club.agent.example.com") == "club.agent.example.com"
+    assert _served(context, "CLUB.agent.example.com.") == "club.agent.example.com"
+    # By IP (no SNI), by a name on the CA's certificate, by any other name: the CA's.
+    assert _served(context, None) == "192.0.2.10"
+    assert _served(context, "agent.example.com") == "192.0.2.10"
+    assert _served(context, "other.agent.example.com") == "192.0.2.10"
+    # Expired (the clock moved past it): the CA's for its name too.
+    late = hosted.server_context(env, now=lambda: 4e9)
+    assert _served(late, "club.agent.example.com") == "192.0.2.10"
+    # A broken Let's Encrypt pair never stops the listeners.
+    with open(env[hosted.PUBLIC_KEY_ENV], "w") as f:
+        f.write("not a key")
+    assert _served(hosted.server_context(env), "club.agent.example.com") == "192.0.2.10"
+
+
+def test_wildcard_names_match_one_label():
+    assert hosted._name_matches("a.example.com", ["*.example.com"])
+    assert not hosted._name_matches("a.b.example.com", ["*.example.com"])
+    assert not hosted._name_matches("example.com", ["*.example.com"])
+
+
+def test_a_sealed_key_for_another_agent_is_refused(agent, tmp_path):
+    from cryptography.hazmat.primitives.asymmetric import ec
+    box = public_bundle(_csr_of(ec.generate_private_key(ec.SECP256R1())), "club.agent.example.com")["key"]
+    with pytest.raises(Exception):  # noqa: B017  # AES-GCM: InvalidTag
+        hosted.open_sealed(ec.generate_private_key(ec.SECP256R1()), box)
+    with pytest.raises(ValueError):
+        hosted.open_sealed(ec.generate_private_key(ec.SECP256R1()), {"alg": "none"})
+
+
+def _csr_of(key):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.x509.oid import NameOID
+    csr = (x509.CertificateSigningRequestBuilder()
+           .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "agent")])).sign(key, hashes.SHA256()))
+    return csr.public_bytes(serialization.Encoding.PEM).decode()
 
 
 def test_log_level_from_floorbit_now_and_hall_alias_wins(tmp_path, monkeypatch):

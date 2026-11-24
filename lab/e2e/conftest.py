@@ -2,7 +2,7 @@
 against fakes: a real Floorbit, real agents, the lab LibreNMS and the simulated switches.
 
 Settings (env): LAB_FLOORBIT_URL, LAB_ADMIN_PASSWORD, LAB_AGENT_METRICS ("name=url,..."),
-LAB_CAPTIVE (an agent's captive portal URL), LAB_FRONT_DOOR (an agent's front door),
+LAB_FRONT_DOOR (an agent's front door: check-in, the note on phones, the seat walk),
 LAB_AGENT_DOWN (the agent the failover run stopped).
 
 LAB_DRILL names the bad day the lab is in, and only that drill's tests run (test_drills.py, and

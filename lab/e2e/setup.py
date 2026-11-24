@@ -80,15 +80,19 @@ def plugins(fb, args):
         'librenms.url': args.librenms_url, 'librenms.token': args.librenms_token,
         'plugin.syslog-relay.port': args.syslog_port,
         'plugin.netflow-relay.port': args.flows_port,
-        'plugin.captive-note.address': args.captive, 'plugin.captive-note.proxies': args.captive_proxies,
-        # Check-in learns the seat PC's address only through the front door.
-        'plugin.front-door.address': args.front_door, 'plugin.front-door.proxies': args.captive_proxies,
+        # The front door (check-in, the note on phones, the seat walk) is on by default with its own
+        # addresses, as on a fresh agent: only the tests' stand-in reverse proxy is named here.
+        'plugin.front-door.proxies': args.proxies,
     }
+    if args.front_door:
+        settings['plugin.front-door.address'] = args.front_door
+    if args.front_door_http:
+        settings['plugin.front-door.http_address'] = args.front_door_http
     status, body = fb.call('PATCH', '/api/settings', settings)
     if status != 200:
         raise SystemExit(f'Setting up the plugins failed: {status} {body}')
-    listeners = ['syslog-relay', 'netflow-relay', 'captive-note', 'front-door']
-    for pid in ['librenms', *listeners]:
+    listeners = ['syslog-relay', 'netflow-relay', 'front-door']
+    for pid in ['librenms', 'syslog-relay', 'netflow-relay']:     # the front door is on already
         status, body = fb.call('PUT', f'/api/settings/plugins/{pid}', {'enabled': True})
         if status != 200:
             raise SystemExit(f'Turning on {pid} failed: {status} {body}')
@@ -103,7 +107,7 @@ def plugins(fb, args):
             status, answer = fb.call('PATCH', f'/api/agents/{agent["id"]}', {'plugins_off': off})
             if status != 200:
                 raise SystemExit(f'Leaving plugins off on {agent["name"]} failed: {status} {answer}')
-    print('Set up the plugins: LibreNMS, syslog, NetFlow, the check-in note, the front door.')
+    print('Set up the plugins: LibreNMS, syslog, NetFlow (the front door is on by default).')
 
 
 def switch_logins(fb, args):
@@ -148,27 +152,29 @@ def telemetry(fb, args):
         if dev.name not in ids:
             raise SystemExit(f'{dev.name} is not in the inventory')
         host, _, port = where.get(dev.name, dev.ip).partition(':')
-        props = {'telemetry_drivers': 'snmp traps'}
+        props = {'telemetry.drivers': 'snmp traps'}
         if host != dev.ip:
-            props['telemetry_address'] = host
+            props['telemetry.address'] = host
         if port:
-            props['telemetry_port_snmp'] = port
+            props['telemetry.snmp.port'] = port
         if dev.role == 'firewall':
-            platform, props['telemetry_drivers'] = 'OPNsense', 'snmp push'
+            platform, props['telemetry.drivers'] = 'OPNsense', 'snmp push'
         elif dev.role == 'core':
             platform = 'NX-OS'
-            props.update(telemetry_drivers='snmp traps mdt', telemetry_mdt_node=dev.name)
+            props.update({'telemetry.drivers': 'snmp traps mdt', 'telemetry.mdt.node': dev.name})
         else:
             platform = 'IOS'
             vlans = sorted(SEAT_VLAN.values()) if dev.role == 'distribution' else sorted(
                 {s.vlan for s in LAB.seats if s.switch == dev.name})
-            props.update(telemetry_fdb='cisco_vlans', telemetry_vlans=' '.join(str(v) for v in vlans))
+            props.update({'telemetry.snmp.fdb': 'cisco_vlans', 'telemetry.snmp.vlans': ' '.join(str(v) for v in vlans)})
         body = {'platform': platform, 'properties': props}
         status, answer = fb.call('PATCH', f'/api/inventory/{ids[dev.name]}', body)
         if status != 200:
             raise SystemExit(f'Setting up telemetry for {dev.name} failed: {status} {answer}')
     wireless(fb)
     print(f'Set up telemetry for {len(LAB.devices)} devices and {WLC.name}.')
+    if args.trap_v3:
+        trap_user(fb, args.trap_v3, ids)
 
 
 def wireless(fb):
@@ -186,6 +192,20 @@ def wireless(fb):
         'platform': 'IOS-XE', 'properties': {'telemetry_drivers': 'mdt', 'telemetry_mdt_node': WLC.name}})
     if status != 200:
         raise SystemExit(f'Setting up telemetry for {WLC.name} failed: {status} {answer}')
+
+
+def trap_user(fb, spec, ids):
+    """One device's own SNMPv3 trap user (floorbit#975), as LAB_TRAP_V3 has it: Floorbit gives
+    it a listener on the collecting agent (the usual one while it is the only v3 trap user)."""
+    device, _, rest = spec.partition('=')
+    login, _, _dest = rest.rpartition('@')
+    user, auth, auth_pass, priv, priv_pass = login.split(':')
+    status, answer = fb.call('PUT', '/api/inventory/credentials', {
+        'owner_type': 'device', 'owner_id': ids[device], 'kind': 'snmp_trap', 'username': user,
+        'auth_protocol': auth, 'secret': auth_pass, 'priv_protocol': priv, 'priv_secret': priv_pass})
+    if status not in (200, 201):
+        raise SystemExit(f'Setting the trap user of {device} failed: {status} {answer}')
+    print(f'{device} sends traps as {user}.')
 
 
 def seed(fb):
@@ -237,16 +257,18 @@ def main(argv=None):
     p.add_argument('--librenms-token', default='lab-librenms-token')
     p.add_argument('--syslog-port', type=int, default=5514)
     p.add_argument('--flows-port', type=int, default=2055)
-    p.add_argument('--captive', default='0.0.0.0:8908')
-    p.add_argument('--front-door', default='0.0.0.0:8443')
-    # The tests ask the note and the front door as a reverse proxy would, naming the player in
-    # X-Forwarded-For.
-    p.add_argument('--captive-proxies', default='172.31.10.60')
+    # Empty: the plugin's defaults (0.0.0.0:8443 and 0.0.0.0:8080), as on a fresh agent.
+    p.add_argument('--front-door', default='')
+    p.add_argument('--front-door-http', default='')
+    # The tests ask the front door as a reverse proxy would, naming the player in X-Forwarded-For.
+    p.add_argument('--proxies', default='172.31.10.60,172.31.10.1')   # the e2e container, the CI runner
     p.add_argument('--listeners-on', default='', help='the one agent that runs the listening plugins')
     # Without VRRP every agent counts as the collector (Floorbit's docs/telemetry.md): one collects.
     p.add_argument('--telemetry-on', default='', help='the one agent that collects telemetry')
     p.add_argument('--snmp-devices', default='',
                    help='where Telegraf polls each device, "name=host:port,..." (default: its lab address, port 161)')
+    p.add_argument('--trap-v3', default=os.environ.get('LAB_TRAP_V3', ''),
+                   help="one device's SNMPv3 trap user, as replay.py's LAB_TRAP_V3")
     p.add_argument('--ssh-port', type=int, default=22, help="the switches' SSH port (lab/switch_ssh)")
     # The lab switches' own login (switch_ssh/server.py), not a secret.
     p.add_argument('--ssh-login', default='lab:lab-switch-password', help='user:password')
