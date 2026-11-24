@@ -20,6 +20,7 @@ import io
 import json
 import os
 import pathlib
+import random
 import signal
 import sys
 import threading
@@ -866,8 +867,14 @@ class Agent:
                     self.log(logs.warning(f'[agent] cannot reach {self.url} ({exc}); trying again in {backoff} s'))
                 self.metrics.set('floorbit_agent_connected', 0)
                 connected = False
-                self._stop.wait(backoff)
+                self._stop.wait(jittered(backoff))
                 backoff = min(backoff * 2, MAX_BACKOFF)
+
+
+def jittered(seconds, rand=random.random):
+    """``seconds`` give or take a fifth: after a hosted restart every agent (of every tenant) lost
+    the link at the same moment, and without this they would all knock again in the same second."""
+    return seconds * (0.8 + 0.4 * rand())
 
 
 def check(agent, execute, out=print):
@@ -1110,6 +1117,12 @@ def main(argv=None):
     logs.say(f'[agent] Floorbit agent {version} starting: hosted Floorbit {url}, log level {level}, '
              f'status page and metrics on {os.environ.get("FLOORBIT_AGENT_METRICS", "0.0.0.0:9520")}')
     keepalived = start_vrrp(agent, os.environ, out=logs.say)
+    if keepalived is False:
+        # Before the plugins start: their listeners would bind the event network's ports for nothing.
+        host.stop()
+        if metrics_server:
+            metrics_server.shutdown()
+        return 2
     host.vrrp = keepalived or None
     agent.metrics.collect(host.collect)
     host.start()
@@ -1117,11 +1130,6 @@ def main(argv=None):
     reporter = logs.Reporter(lambda: status_page.status(agent, agent_metrics.health_of(agent, HEALTHY_FOR)[1]),
                              logs.summary_every(os.environ))
     reporter.start()
-    if keepalived is False:
-        host.stop()
-        if metrics_server:
-            metrics_server.shutdown()
-        return 2
     # docker stop sends SIGTERM: leave the way Ctrl+C does, so the plugins stop cleanly.
     signal.signal(signal.SIGTERM, _stop_on_term)
     try:
