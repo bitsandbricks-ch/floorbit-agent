@@ -51,7 +51,7 @@ MAX_WAITING = 200         # calls of one kind waiting: more get a "busy" answer 
 METHODS = ('configured', 'devices', 'device_details', 'resolve_ip', 'port_stats', 'device_ports', 'arp',
            'port_clients', 'inventory_feeds', 'cable_feeds', 'firewall_feeds', 'health_feeds', 'dns_feeds',
            'wifi_feeds', 'game_query', 'game_rcon', 'neighbours', 'device_facts', 'active_alerts', 'dns_probe',
-           'tcp_probe', 'plugin',
+           'tcp_probe', 'check_probe', 'plugin',
            'plugins_reload',
            'switch_call', 'shell_open', 'shell_io', 'shell_close', 'plugin_test')
 # Pools bigger than WORKERS: a switch command runs on many switches at once, and each open terminal
@@ -207,8 +207,10 @@ def game_call(method, args, env=None):
 def probe_target(host, env=None):
     """The address to probe, if it may be probed. Unlike game servers, internet lines and resolvers
     are often public, so any address goes except this machine's own and link-local ones (or only
-    FLOORBIT_AGENT_PROBE_NETS when set). A probe only connects to 53, 80, 443 or 853 and sends
-    nothing, or sends one DNS query, so it can't be used to talk to a service."""
+    FLOORBIT_AGENT_PROBE_NETS when set). A service probe only connects to 53, 80, 443 or 853 and
+    sends nothing, or sends one DNS query. A crew's own check (``check_probe``) may use any port,
+    but sends at most a plain GET or one known harmless UDP question, and only the status, the time
+    and the certificate's end come back, never what a service said."""
     import ipaddress
     import socket
 
@@ -230,10 +232,16 @@ def probe_target(host, env=None):
 
 
 def probe_call(method, args, env=None):
-    """A DNS or TCP probe for the services view (floorbit/probes.py), from the event network."""
+    """A DNS or TCP probe for the services view, or a crew's own check (ping, TCP, UDP, HTTP(S),
+    bitsandbricks-ch/floorbit#1338), from the event network (floorbit/probes.py)."""
     from floorbit import probes
     from floorbit.plugins.base import PluginError
     try:
+        if method == 'check_probe':
+            spec = args[0] if args and isinstance(args[0], dict) else None
+            if spec is None:
+                raise PluginError('The probe was asked for wrongly.')
+            return probes.check(spec, resolve=lambda host: probe_target(host, env))
         if method == 'dns_probe':
             server, name = args
             return probes.dns(probe_target(server, env), str(name))
@@ -273,7 +281,7 @@ def local_executor(app, plugins_ref=None):
             raise PluginError(f'{method} is not something the agent answers')
         if method in ('game_query', 'game_rcon'):
             return game_call(method, args)
-        if method in ('dns_probe', 'tcp_probe'):
+        if method in ('dns_probe', 'tcp_probe', 'check_probe'):
             return probe_call(method, args)
         if method == 'shell_io':          # no app context: it only reads and writes an open shell
             return switches.shells.io(args)

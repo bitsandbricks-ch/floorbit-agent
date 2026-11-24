@@ -60,3 +60,25 @@ def test_never_this_machine_nor_other_ports(probes, monkeypatch):
     assert execute('tcp_probe', ['203.0.113.9', 53, 3])['sent'] == 3
     with pytest.raises(PluginError, match='may probe'):
         execute('tcp_probe', ['10.0.0.1', 443, 5])
+
+
+def test_own_checks_run_here_through_the_same_address_rule(probes, monkeypatch):
+    """A crew's own check (bitsandbricks-ch/floorbit#1338): any port, but the address goes through
+    probe_target like every probe, and only what floorbit/probes.py returns comes back."""
+    seen = []
+
+    def check(spec, resolve):
+        address = resolve(spec.get('host') or 'www.example.com')
+        seen.append((spec['kind'], address))
+        return {'kind': spec['kind'], 'sent': 3, 'lost': 0, 'ms': 1.5}
+    probes.check = check
+    execute = floorbit_agent.local_executor(flask.Flask('test'))
+    assert execute('check_probe', [{'kind': 'tcp', 'host': '10.0.0.1', 'port': 8080}])['ms'] == 1.5
+    assert seen == [('tcp', '10.0.0.1')]
+    with pytest.raises(PluginError, match='may probe'):
+        execute('check_probe', [{'kind': 'ping', 'host': '127.0.0.1'}])
+    with pytest.raises(PluginError, match='asked for wrongly'):
+        execute('check_probe', ['10.0.0.1'])
+    monkeypatch.setenv('FLOORBIT_AGENT_PROBE_NETS', '203.0.113.0/24')
+    with pytest.raises(PluginError, match='may probe'):
+        execute('check_probe', [{'kind': 'tcp', 'host': '10.0.0.1', 'port': 8080}])

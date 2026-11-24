@@ -49,6 +49,11 @@ UDP and sends them on, the flows only as a summary.
   and resolvers usually are, but never to the agent machine or link-local addresses (or only to
   `FLOORBIT_AGENT_PROBE_NETS` when set). A TCP probe only connects to port 53, 80, 443 or 853, at
   most ten times, and sends nothing; a DNS probe sends one A query. Neither can talk to a service.
+  The crew's own checks (`check_probe`) go to the same addresses, but to any port: a ping (three
+  echo requests), a TCP connect that sends nothing, one fixed UDP question (DNS, NTP, Source query
+  or an empty packet) or one HTTP(S) `GET` with no body, no cookies and no login, reading at most
+  64 KB of the answer. They let a taken-over hosted Floorbit map which ports answer on networks the
+  agent may reach, as anyone in the hall could; `FLOORBIT_AGENT_PROBE_NETS` narrows that.
   Switch SSH (`switch_call`, `shell_open`, `shell_io`, `shell_close`, floorbit_agent/switches.py)
   runs only the port plugin's own methods (`bounce_port`, `set_port`, `send_commands`, a shell):
   which commands a template may send is decided by the hosted side's role checks, so a taken-over
