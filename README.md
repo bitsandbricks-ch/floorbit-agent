@@ -223,7 +223,10 @@ agent's protocol answers 426, and the agent stops and says so.
 
 The agent reuses Floorbit's plugins and flow collector instead of copying them. The image takes the
 Python parts of Floorbit at one commit, `FLOORBIT_REF` (no web pages, no React app), and CI tests
-against that same commit.
+against that same commit. A plugin added to Floorbit reaches agents only once that commit moves, so
+the daily **Floorbit ref** workflow (`.github/workflows/floorbit-ref.yml`) opens a pull request that
+moves it to Floorbit master, names the new agent-side plugins, and runs CI with the lab on it. When
+that is red, fix it on the pull request's branch; the next run builds on top of it.
 
 ## Develop
 

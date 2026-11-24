@@ -1,0 +1,99 @@
+name: Floorbit ref
+
+# Keeps FLOORBIT_REF on Floorbit master (issue #88). The image carries Floorbit's plugins at that
+# commit only, so a new agent-side plugin reaches no agent until the ref moves (#85). Every day this
+# opens or updates one pull request that moves it, and runs CI on it (the lab included), so drift
+# shows up while it is small. A person merges it.
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: floorbit-ref
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      BRANCH: bot/floorbit-ref
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0     # the bot branch is merged with main
+      - name: Floorbit master
+        id: master
+        run: |
+          sha=$(gh api repos/bitsandbricks-ch/floorbit/commits/master --jq .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "pinned=$(tr -d '[:space:]' < FLOORBIT_REF)" >> "$GITHUB_OUTPUT"
+      - name: The agent-side plugins it adds
+        if: steps.master.outputs.sha != steps.master.outputs.pinned
+        id: plugins
+        env:
+          PINNED: ${{ steps.master.outputs.pinned }}
+          MASTER: ${{ steps.master.outputs.sha }}
+        run: |
+          # Built-in plugins with an agent part at each commit: the ones new at master are what
+          # agents say they "don't have" until this merges.
+          agent_plugins() {
+            gh api "repos/bitsandbricks-ch/floorbit/contents/floorbit/builtin_plugins?ref=$1" --jq '.[] | select(.type == "dir") | .name' |
+              while read -r id; do
+                if gh api "repos/bitsandbricks-ch/floorbit/contents/floorbit/builtin_plugins/$id/plugin.yaml?ref=$1" \
+                     -H 'Accept: application/vnd.github.raw' 2>/dev/null | grep -q '^agent:'; then
+                  echo "$id"
+                fi
+              done | sort
+          }
+          # shellcheck disable=SC2016  # the backticks are Markdown for the PR, not an expansion
+          new=$(comm -13 <(agent_plugins "$PINNED") <(agent_plugins "$MASTER") | sed 's/^/`/; s/$/`/' | paste -sd, - | sed 's/,/, /g')
+          echo "new=${new:-none}" >> "$GITHUB_OUTPUT"
+      - name: Open or update the pull request
+        if: steps.master.outputs.sha != steps.master.outputs.pinned
+        env:
+          PINNED: ${{ steps.master.outputs.pinned }}
+          MASTER: ${{ steps.master.outputs.sha }}
+          NEW_PLUGINS: ${{ steps.plugins.outputs.new }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898+github-actions[bot]@users.noreply.github.com"
+          # On top of the open branch, so fixes pushed to it for the last bump stay.
+          if git fetch -q origin "$BRANCH" 2>/dev/null; then
+            git switch -q -C "$BRANCH" FETCH_HEAD
+            git merge -q --no-edit origin/main
+          else
+            git switch -q -C "$BRANCH"
+          fi
+          if [ "$(tr -d '[:space:]' < FLOORBIT_REF)" = "$MASTER" ]; then
+            echo "The branch is on ${MASTER::7} already."
+            exit 0
+          fi
+          echo "$MASTER" > FLOORBIT_REF
+          git commit -qam "build(agent): build on Floorbit master ${MASTER::7}"
+          git push origin "$BRANCH"
+          title="build(agent): build on Floorbit master ${MASTER::7}"
+          body=$(cat <<EOF
+          Moves \`FLOORBIT_REF\` from \`${PINNED::7}\` to Floorbit master \`${MASTER::7}\` ([changes](https://github.com/bitsandbricks-ch/floorbit/compare/${PINNED}...${MASTER})). Opened by the daily *Floorbit ref* workflow (#88).
+
+          New agent-side plugins: ${NEW_PLUGINS}
+
+          CI (with the lab) runs on this branch. When it's red, Floorbit changed something the agent or the lab relies on: fix it on this branch before merging.
+          EOF
+          )
+          number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --title "$title" --body "$body"
+          else
+            gh pr create --draft --base main --head "$BRANCH" --title "$title" --body "$body"
+          fi
+          # A push with the workflow token starts no other workflow; a dispatch does, and its checks
+          # land on this commit, so the pull request shows them.
+          gh workflow run ci.yml --ref "$BRANCH"
