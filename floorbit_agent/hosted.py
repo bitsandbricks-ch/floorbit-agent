@@ -33,6 +33,7 @@ FIELDS = {
     'vrrp_peers': ('FLOORBIT_AGENT_VRRP_PEERS', False),
     'log_level': ('FLOORBIT_AGENT_LOG_LEVEL', True),
     'log_summary': ('FLOORBIT_AGENT_LOG_SUMMARY', False),
+    'hall_url': ('FLOORBIT_AGENT_HALL_URL', True),
 }
 # Other names the hall may have used for the same setting; they win too.
 ALIASES = {'FLOORBIT_AGENT_LOG_LEVEL': ('LOG_LEVEL',)}

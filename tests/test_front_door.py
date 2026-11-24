@@ -174,6 +174,30 @@ def test_with_a_certificate_the_plain_port_sends_browsers_on_to_https():
         server.shutdown()
 
 
+def test_published_on_other_ports_the_redirect_and_the_hall_url_follow(monkeypatch):
+    # Something else holds 443 on the box: compose publishes HTTPS on 8443 and says so (issue #1361).
+    from floorbit_agent import captive
+    monkeypatch.setenv('FLOORBIT_AGENT_HTTPS_PORT', '8443')
+    monkeypatch.setenv('FLOORBIT_AGENT_HTTP_PORT', '8080')
+    assert front_door.published() == {'https': 8443, 'http': 8080}
+    api = captive.Captive(lambda: {'done': []}, log=lambda *_: None, note=False)
+    d = front_door.FrontDoor('https://floorbit.example.com', KEY, http=FakeHttp(), log=lambda *_: None)
+    server = front_door.serve(d, '127.0.0.1:0', captive=api, to_https=True, log=lambda *_: None)
+    try:
+        r, _ = ask(server.server_address[1], 'GET', '/checkin', headers={'Host': 'checkin.lan:8080'})
+        assert r.getheader('Location') == 'https://checkin.lan:8443/checkin'
+    finally:
+        server.shutdown()
+    assert front_door.published({'FLOORBIT_AGENT_HTTPS_PORT': 'nope', 'FLOORBIT_AGENT_HTTP_PORT': '0'}) == \
+        {'https': 443, 'http': 80}
+    # Named by the hall or Floorbit: that wins over what browsers used; a bad one is ignored.
+    monkeypatch.setattr(front_door, '_seen', {'url': 'http://checkin.lan', 'at': 1.0})
+    assert front_door.hall_url({'FLOORBIT_AGENT_HALL_URL': 'https://walk.example.com:8443/'}) == \
+        'https://walk.example.com:8443'
+    assert front_door.hall_url({'FLOORBIT_AGENT_HALL_URL': 'javascript:alert(1)'}) == 'http://checkin.lan'
+
+
+
 def test_one_browsers_sign_in_cookie_is_never_sent_for_another(door):
     """Every attendee goes through one HTTP session: a cookie the hosted side sets must go to that
     browser only, or the crew's sign-in at the door would sign in everyone behind it."""

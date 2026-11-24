@@ -205,6 +205,15 @@ address serves:
   ever to the Floorbit in `FLOORBIT_URL`. Nothing to set: Floorbit sends the laptop to the check-in
   name, or to the address browsers last reached this agent at, which the agent learns by itself.
 
+### Other ports than 443 and 80
+
+When something else on the machine holds 443 or 80, publish the front door elsewhere: set
+`HTTPS_PUBLISH_PORT` and `HTTP_PUBLISH_PORT` in the `.env` next to `compose.yml` (for example 8443
+and 8080). Compose passes them into the agent, so its redirect to HTTPS goes to the right port, and
+Floorbit adds them to a check-in name that doesn't carry a port. Where the hall reaches the agent
+by another way (a reverse proxy, port forwarding), name it with `FLOORBIT_AGENT_HALL_URL`
+(`https://checkin.lan:8443`) here or as "Reached in the hall at" on the agent's page in Floorbit.
+
 HTTPS needs a certificate (`FLOORBIT_AGENT_TLS_CERT` and `_KEY`, or one from Floorbit's agents CA);
 until then both ports answer plain HTTP, and with one, port 80 sends browsers on to HTTPS. A browser
 that uses the wrong one gets a line in the log that says so, not a stack trace.
