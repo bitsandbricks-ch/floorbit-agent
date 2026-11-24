@@ -12,6 +12,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
+- Built on Floorbit with one trap listener per SNMPv3 trap user (Floorbit #1105): a device's own trap user gets its own port from 1163 to 1170.
 - One port for attendees: the front door answers the check-in note on phones (`/.well-known/captive-portal`) and the crew's seat walk-through (`/floorbit/hello/<code>`) itself, so `/` on the agent is the check-in page and port 8908 is gone. `compose.yml` publishes 443 and 80; with a certificate, port 80 sends browsers on to HTTPS. Built on Floorbit #986, where the front door is on by default.
 - The agent learns where browsers in the hall reach it and reports it for the seat walk-through: `FLOORBIT_AGENT_LAN_URL` is gone (Floorbit #999).
 
