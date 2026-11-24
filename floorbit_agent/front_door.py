@@ -24,7 +24,10 @@ ever need one address. With a certificate, a second plain-HTTP listener sends br
 
 The front door remembers the address it was last reached at from the hall (``seen_url``): Floorbit
 sends the crew's seat walk-through there when nobody named the check-in address, so no one has to
-tell the agent where it is.
+tell the agent where it is. ``FLOORBIT_AGENT_HALL_URL`` (env, or the agent's page in Floorbit) names
+it instead. compose.yml passes the ports the host publishes the listeners on
+(``FLOORBIT_AGENT_HTTPS_PORT``/``_HTTP_PORT``): the redirect to HTTPS goes there, and Floorbit adds
+them to a check-in address without a port (issue #1361).
 
 Point the event DNS name of the check-in page (``CHECKIN_ADDRESS``, for example ``checkin.lan``) at
 the agent. With ``FLOORBIT_AGENT_TLS_CERT`` and ``FLOORBIT_AGENT_TLS_KEY`` it serves HTTPS; crew
@@ -70,6 +73,33 @@ min-height:100vh;background:#f4f4f5;color:#18181b}main{max-width:28rem;padding:1
 It tries again by itself every 30 seconds.</p>
 <h1 lang="de">Floorbit ist gerade nicht erreichbar</h1><p lang="de">Das Netz in der Halle geht; nur diese
 Seite muss warten. Sie versucht es alle 30 Sekunden von selbst wieder.</p></main></body></html>'''
+
+
+URL_RE = re.compile(r'^https?://[A-Za-z0-9.:\[\]-]{1,120}(/[^\s]{0,60})?$')
+
+
+def published(env=None):
+    """``{"https": port, "http": port}`` the host publishes the front door on (compose.yml passes
+    them in); 443 and 80 when it doesn't say."""
+    import os
+    env = os.environ if env is None else env
+    out = {}
+    for scheme, var, default in (('https', 'FLOORBIT_AGENT_HTTPS_PORT', 443), ('http', 'FLOORBIT_AGENT_HTTP_PORT', 80)):
+        try:
+            port = int(str(env.get(var) or default).strip())
+        except ValueError:
+            port = default
+        out[scheme] = port if 0 < port < 65536 else default
+    return out
+
+
+def hall_url(env=None):
+    """Where laptops in the hall reach this agent: FLOORBIT_AGENT_HALL_URL when the hall or
+    Floorbit named it, else where a browser last reached it, else ''."""
+    import os
+    env = os.environ if env is None else env
+    named = str(env.get('FLOORBIT_AGENT_HALL_URL') or '').strip().rstrip('/')
+    return named if URL_RE.match(named) else seen_url()
 
 
 def seen_url():
@@ -255,7 +285,10 @@ def handler_for(door, captive=None, to_https=False):
             if to_https:
                 host = str(self.headers.get('Host') or '').split(':')[0]
                 if HOST_RE.match(host):
-                    return self.answer(308, {'Location': f'https://{host}{self.path}'}, b'', 'text/plain')
+                    # The host may publish HTTPS on another port than 443 (compose.yml, issue #1361).
+                    port = published()['https']
+                    there = host if port == 443 else f'{host}:{port}'
+                    return self.answer(308, {'Location': f'https://{there}{self.path}'}, b'', 'text/plain')
             speed = SPEED_RE.match(path)
             if speed:
                 door.count('speed')

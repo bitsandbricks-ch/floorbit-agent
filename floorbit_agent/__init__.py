@@ -454,10 +454,16 @@ class Agent:
             self.http.auth = self.signer
 
     @property
-    def lan_url(self):
-        # Learnt, not set: where browsers in the hall last reached the front door (front_door.py).
+    def front_door_ports(self):
         from . import front_door
-        return front_door.seen_url()
+        return front_door.published()
+
+    @property
+    def lan_url(self):
+        # Named (FLOORBIT_AGENT_HALL_URL, from the hall or Floorbit), else learnt: where browsers in
+        # the hall last reached the front door (front_door.py).
+        from . import front_door
+        return front_door.hall_url()
 
     def take_hosted(self, block):
         """The ``agent`` block of the plugin config: settings, a key to fetch, the certificate's
@@ -650,6 +656,7 @@ class Agent:
             'front_door_failed': m.total('floorbit_agent_front_door_requests_total', outcome='failed'),
             # Where laptops in the hall reach this agent, for Floorbit's seat walk-through.
             **({'lan_url': self.lan_url} if self.lan_url else {}),
+            'front_door_ports': self.front_door_ports,
             **({'settings': self.hosted_report()} if self.hosted is not None else {}),
             **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
             **({'updates': self.plugins.updater.report()}

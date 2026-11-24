@@ -142,6 +142,7 @@ def test_the_agent_reports_the_hello_and_where_laptops_reach_it(monkeypatch):
     assert make(FakeHost()).report()["lan_url"] == "http://checkin.lan"
     front_door._saw("evil.example/<x>", True, "10.10.1.20")      # not a host name: ignored
     assert make(FakeHost()).lan_url == "http://checkin.lan"
+    assert make(FakeHost()).report()["front_door_ports"] == {"https": 443, "http": 80}
 
 
 def test_it_counts_answers_and_says_when_the_list_is_failing():

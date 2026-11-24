@@ -107,12 +107,12 @@ def test_the_crew_walks_a_seat_from_the_walk_page(fb, lab, browser):
     page.keyboard.press('Enter')
     page.wait_for_url(f'{DOOR}/seat-walk', timeout=30_000)
     # Not networkidle: the page keeps a live-updates stream open.
-    page.get_by_label('Rows').first.wait_for(timeout=30_000)
+    rows = page.get_by_role('list', name='Rows')
+    rows.wait_for(timeout=30_000)
     assert not page.get_by_text("doesn't know where laptops").count()
     assert not page.get_by_text('No laptop in the hall has reached a local agent yet').count()
-    page.get_by_label('Rows').first.click()
-    page.get_by_role('option').filter(has_text=re.compile(r'^D\b')).first.click()     # block D's first row
-    page.keyboard.press('Escape')
+    # The row list beside the walk: block D's first row.
+    rows.get_by_role('listitem').filter(has_text=re.compile(r'^(Block D,|Row D)')).first.click()
     start = page.get_by_role('button', name='Start at')
     start.wait_for()
     label = start.inner_text().replace('Start at', '').strip()
