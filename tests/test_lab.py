@@ -340,3 +340,23 @@ def test_the_core_speaks_nx_os(tmp_path):
                      device='core-01')
     assert 'Ethernet1/49 is up' in screen and "% Invalid command at '^' marker." in screen
     assert 'interface Ethernet1/49\n  description uplink dist-01 TenGigabitEthernet1/1\n  no shutdown' in screen
+
+
+def test_a_push_before_the_listener_is_up_is_said_once_then_when_it_works(monkeypatch):
+    """The simulators start before the agent's Telegraf listens (#75): no line per round for that."""
+    monkeypatch.setattr(replay, '_failing', {})
+    monkeypatch.setenv('LAB_PUSH_URL', 'http://192.0.2.31:8186/write')
+    monkeypatch.setattr(replay, 'telemetry_token', lambda: '')
+    up = {'now': False}
+
+    def push(url, lines, token=''):
+        if not up['now']:
+            raise OSError('[Errno 113] No route to host')
+    monkeypatch.setattr(replay, 'push', push)
+    said = []
+    for rnd in range(5):
+        replay.one_round(rnd, time.time(), device='fw-01', log=said.append)
+    assert len(said) == 1 and 'trying again' in said[0]
+    up['now'] = True
+    assert replay.one_round(5, time.time(), device='fw-01', log=said.append)['push']
+    assert said[-1].endswith('works again after 5 failed round(s)')
