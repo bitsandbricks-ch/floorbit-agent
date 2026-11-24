@@ -235,12 +235,13 @@ def seed(fb):
             'name': block, 'x': 20, 'y': 30 + i * 14, 'cols': SEATS_PER_BLOCK, 'rows': 1})
         if status != 201:
             raise SystemExit(f'Adding block {block} failed: {status} {body}')
-    # The core routes blocks A and B to fw-01, C and D to fw-02, each with the other as its backup.
+    # The core routes blocks A and B to fw-01, C and D to fw-02, each with the other as its fallback
+    # (one firewall per range: several would cut the range into parts, floorbit docs/firewalls.md).
     first, second = (fw.name for fw in LAB.firewalls)
     for i, (block, vlan) in enumerate(SEAT_VLAN.items()):
-        line = [first, second] if i < len(SEAT_VLAN) // 2 else [second, first]
+        own, fallback = (first, second) if i < len(SEAT_VLAN) // 2 else (second, first)
         status, body = fb.call('POST', '/api/firewalls/ranges', {
-            'cidr': f'10.10.{vlan}.0/24', 'name': f'Block {block}', 'firewalls': line})
+            'cidr': f'10.10.{vlan}.0/24', 'name': f'Block {block}', 'firewalls': [own], 'fallback': [fallback]})
         if status not in (200, 201):
             raise SystemExit(f'Adding the range of block {block} failed: {status} {body}')
     print(f'Drew the lab hall: {len(LAB.devices)} devices, {len(LAB.seats)} seats, {len(SEAT_VLAN)} firewall ranges.')

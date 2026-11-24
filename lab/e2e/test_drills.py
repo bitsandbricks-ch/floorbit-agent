@@ -20,6 +20,11 @@ def _ranges(fb):
     return {r['cidr']: r for r in _firewalls(fb)['ranges']}
 
 
+def _parts(body):
+    """Every range's parts: each has its own firewall, the one it takes now and its state."""
+    return [p for r in body['ranges'] for p in r['parts']]
+
+
 def _status(fb, switch):
     return fb.get(f'/api/switches/{switch}/status').get('status')
 
@@ -52,15 +57,15 @@ def test_a_dead_firewalls_ranges_move_to_its_backup(fb, lab):
     def moved():
         body = _firewalls(fb)
         card = {c['name']: c for c in body['firewalls']}[fw.name]
-        theirs = [r for r in body['ranges'] if r['intended'] == fw.name]
+        theirs = [p for p in _parts(body) if p['firewall'] == fw.name]
         return body if card['status'] == 'offline' and theirs and all(
-            r['now'] == backup.name and r['state'] == 'failover' for r in theirs) else None
+            p['now'] == backup.name and p['state'] == 'failover' for p in theirs) else None
     body = eventually(moved, timeout=240, what=f'the ranges of {fw.name} to move to {backup.name}')
     assert body['counts']['down'] == 1 and body['counts']['without'] == 0
-    assert all(r['state'] == 'primary' for r in body['ranges'] if r['intended'] == backup.name)
+    assert all(p['state'] == 'primary' for p in _parts(body) if p['firewall'] == backup.name)
     # The plan's firewall layer marks the seats behind it, by seat, without their IPs.
     seat = next(s for s in lab.seats if s.ip.startswith(f'10.10.{s.vlan}.') and
-                _ranges(fb)[f'10.10.{s.vlan}.0/24']['intended'] == fw.name)
+                _ranges(fb)[f'10.10.{s.vlan}.0/24']['firewalls'] == [fw.name])
     routes = fb.get('/api/firewalls/seats')
     assert routes['seats'][seat.label] == {'now': backup.name, 'intended': fw.name, 'state': 'failover'}
     assert seat.ip not in str(routes)
