@@ -24,6 +24,7 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- The test lab has a Catalyst 9800-CL wireless controller: the replay streams its three access points over MDT (capwap-data, radio-oper-data, rrm-measurement) and the end-to-end test checks they reach the Wi-Fi view through the agent, counts only, with clients over time.
 - Takes the tenant's Let's Encrypt certificate from Floorbit (Floorbit #1026): with a domain set on the hosted Floorbit, the HTTPS listeners serve it to browsers that ask for `<tenant>.agent.<domain>`, and the CA's certificate to everyone else (by IP, by another name, no name, or once the Let's Encrypt one has expired). Its shared key comes encrypted to the agent's own key, which still never leaves the machine.
 - `compose.yml` publishes 1163-1170/udp: a trap listener for each further SNMPv3 trap user (Floorbit #975), and Floorbit shows each device which port it sends to.
 - Answers `device_facts` (Floorbit #966): what a device is (VLANs, networks, transceivers, ...) for discovery, from telemetry first and LibreNMS for the rest, so discovery works with LibreNMS alone.

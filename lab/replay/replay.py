@@ -20,8 +20,9 @@ Where things go (env, comma-separated host:port lists; empty: that stream is off
   LAB_FLOW_TARGETS     NetFlow v9, e.g. agent-a:2055
   LAB_LANCACHE_DIR     a folder to append logs/access.log and dns/query.log to
   LAB_PUSH_URL         Influx line protocol from an OPNsense running Telegraf, POSTed here
-  LAB_STREAM_URL       the core's gNMI and Cisco MDT stream, as Telegraf's gnmi and
-                       cisco_telemetry_mdt inputs hand it on (line protocol), POSTed here
+  LAB_STREAM_URL       the core's gNMI and Cisco MDT stream and the 9800's AP stream, as
+                       Telegraf's gnmi and cisco_telemetry_mdt inputs hand them on (line
+                       protocol), POSTed here
   LAB_TELEMETRY_TOKEN_FILE  the collector's ingest token for both (an agent's
                        plugins/telemetry/ingest-token), sent as "Authorization: Token ..."
 """
@@ -37,7 +38,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from topology import LAB
+from topology import LAB, WLC
 
 FAC_LOCAL7 = 23
 STEAM = 'lancache.steamcontent.com'
@@ -317,6 +318,26 @@ def streamed_lines(rnd, now):
     return out
 
 
+def wireless_lines(rnd, now):
+    """The 9800's MDT for its access points (capwap-data, radio-oper-data, rrm-measurement), in the
+    shape Telegraf's cisco_telemetry_mdt input hands it on with Floorbit's aliases. Counts only: a
+    controller's client list is never subscribed to."""
+    ns, out = int(now) * 1_000_000_000, []
+    for ap in WLC.aps:
+        key = f'mdt_source={WLC.name},wtp_mac={ap.mac}'
+        out.append(f'fb_wlc_ap,{key} name="{ap.name}",device-detail/static-info/ap-models/model="{ap.model}",'
+                   f'ap-state/ap-operation-state="registered" {ns}')
+        for slot, band, channel, width, use, clients in ap.radios:
+            radio = f'{key},radio_slot_id={slot}'
+            out.append(f'fb_wlc_radio,{radio} oper-state="radio-up",current-active-band="{band}",'
+                       f'phy-ht-cfg/cfg-data/curr-freq={channel}i,'
+                       f'phy-ht-cfg/cfg-data/chan-width="chan-width-{width}-mhz" {ns}')
+            # A little movement per round, so the history isn't a flat line.
+            out.append(f'fb_wlc_rrm,{radio} load/cca-util-percentage={use + rnd % 5}i,'
+                       f'load/stations={clients + rnd % 3}i {ns}')
+    return out
+
+
 def telemetry_token():
     path = os.environ.get('LAB_TELEMETRY_TOKEN_FILE')
     try:
@@ -367,7 +388,7 @@ def one_round(rnd, now, seq=0, device=None, log=print):
         except OSError as exc:
             log(f'push to {url} failed: {exc}')
     if (url := os.environ.get('LAB_STREAM_URL')) and (not device or me is LAB.core):
-        lines = streamed_lines(rnd, now)
+        lines = streamed_lines(rnd, now) + wireless_lines(rnd, now)
         try:
             push(url, lines, telemetry_token())
             sent['stream'] = len(lines)
