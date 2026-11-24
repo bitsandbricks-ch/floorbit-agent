@@ -4,6 +4,11 @@ These rules are for AI coding agents (Claude Code, Codex, Copilot, ...) working 
 Humans: see [CONTRIBUTING.md](CONTRIBUTING.md); the same rules apply to you in spirit.
 `CLAUDE.md` imports this file.
 
+This repo follows the [BitsAndBricks handbook](https://github.com/bitsandbricks-ch/handbook),
+profile **agent** (see `.mason.toml`). Read its core chapters and the blocks that profile lists,
+above all [local agents](https://github.com/bitsandbricks-ch/handbook/blob/main/blocks/local-agents.md).
+Where this file differs from the handbook, this file wins for this repo.
+
 ## What this is
 
 The local agent for a hosted Floorbit: it runs on the event network and answers for it over one outgoing HTTPS connection. Overview for users: [README.md](README.md).
