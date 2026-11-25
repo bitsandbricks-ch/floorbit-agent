@@ -323,8 +323,9 @@ def test_the_agent_reports_about_itself_over_the_link():
     assert set(report) == {"up_seconds", "reconnects", "link_drops", "calls_busy", "answers_failed",
                            "syslog_received", "syslog_sent", "syslog_dropped", "syslog_backlog", "flows_packets",
                            "captive_shown", "captive_done", "front_door_passed", "front_door_failed",
-                           "front_door_ports"}
+                           "front_door_ports", "capabilities"}
     assert report.pop("front_door_ports") == {"https": 443, "http": 80}
+    assert report.pop("capabilities") == ["lease", "split", "syslog_hold"]
     assert all(isinstance(v, (int, float)) and v >= 0 for v in report.values())
 
 

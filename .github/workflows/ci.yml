@@ -170,6 +170,16 @@ jobs:
           docker compose -f lab/compose.yml run --rm -e LAB_DRILL=hosted-down e2e
           docker compose -f lab/compose.yml up -d --wait floorbit
           docker compose -f lab/compose.yml run --rm -e LAB_DRILL=hosted-back -e "LAB_HOSTED_AWAY=$from-$(date +%s)" e2e
+      # Floorbit issue #1405 and #1441: kill, restart and stop the agents of the group in turn, with
+      # both splitting the devices; fails on a time over budget or two primaries at once.
+      - name: "Drill: high availability"
+        env:
+          LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src
+        run: |
+          python3 -m venv "$RUNNER_TEMP/drill"
+          "$RUNNER_TEMP/drill/bin/pip" install --quiet requests
+          "$RUNNER_TEMP/drill/bin/python" lab/ha_drill.py --report "$RUNNER_TEMP/ha-drill.md"
+          cat "$RUNNER_TEMP/ha-drill.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Failover (agent A stopped)
         env:
           LAB_FLOORBIT_SRC: ${{ github.workspace }}/floorbit-src

@@ -10,9 +10,11 @@ done: the other agent is primary on the Local agents page, a seat lookup answers
 syslog arrives, the other agent's front door answers. A step fails when a time is over its budget
 or the group ever has two primaries. The report is a Markdown table (and --json for the numbers).
 
-Steps: the primary is killed (the machine dies), it comes back (it must not take the lease back),
-the standby is stopped (nothing may move), the hosted Floorbit is away for a minute (nobody may
-change role), and the primary is stopped cleanly.
+Steps: the primary is killed (the machine dies), it comes back (it must not take the lease back,
+unless it runs more plugins than the one that took over: then it must, since Floorbit gives the
+lease to the agents with the fewest plugins turned off), the standby is stopped (nothing may
+move), the hosted Floorbit is away for a minute (nobody may change role), and the primary is
+stopped cleanly.
 """
 import argparse
 import json
@@ -124,6 +126,11 @@ def last_syslog(fb):
     return fb.get('/api/logs', params={'limit': 1})['status']['last_id']
 
 
+def plugins_off(fb):
+    """{container: how many plugins it has turned off} (the lab turns some off on agent-b)."""
+    return {a['name'].removeprefix('Lab '): len(a.get('plugins_off') or ()) for a in fb.get('/api/agents')['agents']}
+
+
 def front_door_ok(url):
     return requests.get(f'{url}/.well-known/captive-portal', timeout=3).ok
 
@@ -154,13 +161,21 @@ def step_kill_primary(fb, primary, other):
 
 
 def step_back(fb, primary, other):
-    """The old primary comes back: the lease must stay where it is (sticky)."""
+    """The old primary comes back: the lease must stay where it is (sticky), unless the one that
+    came back runs more plugins: then it must get the lease back once, and keep it."""
+    off = plugins_off(fb)
+    keeper = primary if off.get(primary, 0) < off.get(other, 0) else other
     with Watch(fb) as w:
         compose('start', primary)
         back = until(lambda: group(fb)[2] == 2, 120)
         time.sleep(60)
-    moved = [p for _t, p in w.seen if p and p != [other]]
-    return {'reconnected': back}, w.double, 'lease stayed' if not moved else f'lease moved: {moved[-1]}'
+    if keeper == other:
+        moved = [p for _t, p in w.seen if p and p != [other]]
+        return {'reconnected': back}, w.double, 'lease stayed' if not moved else f'lease moved: {moved[-1]}'
+    last = next((p for _t, p in reversed(w.seen) if p), None)
+    note = (f'lease back on {primary} (it runs more plugins)' if last == [primary]
+            else f'lease moved: {last} instead of back to {primary}')
+    return {'reconnected': back}, w.double, note
 
 
 def step_stop_standby(fb, primary, standby):
@@ -220,7 +235,8 @@ def main(argv=None):
     print(f'group primary: {primary}, standby: {other}', flush=True)
     run(f'{primary} is killed', step_kill_primary, primary, other)
     run(f'{primary} comes back', step_back, primary, other)
-    primary, other = other, primary
+    primary = group(fb)[0] or other
+    other = next(n for n in AGENTS if n != primary)
     run(f'standby {other} stops for 30 s', step_stop_standby, primary, other)
     run('the hosted Floorbit is away for 60 s', step_hosted_away, primary)
     settle(fb)
