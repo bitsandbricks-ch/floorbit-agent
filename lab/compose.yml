@@ -36,7 +36,7 @@ x-agent: &agent
   build: {context: .., dockerfile: Dockerfile}
   image: ${LAB_AGENT_IMAGE:-ghcr.io/bitsandbricks-ch/floorbit-agent:latest}
   # The key comes from the enrol step, through a file: an agent reads it from the environment.
-  entrypoint: ["sh", "-c", "FLOORBIT_AGENT_KEY=$$(cat /keys/$$LAB_AGENT.key) exec python -m floorbit_agent"]
+  entrypoint: ["sh", "-c", "FLOORBIT_AGENT_KEY=$$(cat /keys/$$LAB_AGENT.key) exec python -m floorbit_agent_boot"]
   environment: &agent-env
     FLOORBIT_URL: http://172.31.10.2:5000
     # Plain HTTP inside the lab network only; at an event it is always https://.

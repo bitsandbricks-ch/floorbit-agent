@@ -487,6 +487,7 @@ class PluginHost:
         self._busy_lock = threading.Lock()
         self.wanted = {}          # plugin id -> its config, as the hosted side last said
         self.updater = None       # bundles.Updater: signed plugin updates from the hosted side
+        self.self_updater = None  # self_update.SelfUpdater: signed updates of the agent itself
         self.vrrp = None          # vrrp.Keepalived while VRRP runs here
         self.stand_by_for = None  # the agent the hosted side says polls while VRRP is split
         self._ha_heard = None     # when the hosted side last said so (monotonic)
@@ -531,6 +532,8 @@ class PluginHost:
         if self.local is not None and isinstance(body.get('local'), dict):   # an older Floorbit sends none
             self.local.apply(body['local'])
         self.etag = body.get('etag')
+        if self.self_updater is not None:
+            self.self_updater.offered = body.get('agent_update')
         return True
 
     def apply(self, wanted):
@@ -740,6 +743,10 @@ class PluginHost:
                 self.pull()
                 if self.updater is not None:
                     self.updater.watch(self)
+                if self.self_updater is not None:
+                    # Each round, not only on a new config: an approval on this machine counts at once.
+                    # Last: an install stops the agent, and floorbit_agent_boot starts it on the new code.
+                    self.self_updater.offer(self.self_updater.offered)
                 if self.supported is False:
                     wait = PULL_UNSUPPORTED
             except Exception as exc:  # noqa: BLE001  # the main loop says when the hosted side is away
