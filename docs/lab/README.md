@@ -207,7 +207,7 @@ python3 lab/ha_drill.py --report ha-drill.md --json ha-drill.json
 | Step | What it does | Checked (budget) |
 | --- | --- | --- |
 | the primary is killed | `docker compose kill` (the machine dies) | the other agent is primary on the Local agents page (30 s), a seat lookup answers (45 s), new syslog arrives (60 s), the other agent's front door answers (5 s) |
-| it comes back | `start` | it reconnects and does **not** take the lease back for a minute |
+| it comes back | `start` | it reconnects and does **not** take the lease back for a minute, unless it runs more plugins than the other (in the lab agent-b has the listeners and telemetry off): then it takes it back once |
 | the standby stops for 30 s | `stop`, `start` | the primary stays where it is |
 | the hosted Floorbit is away for 60 s | `stop floorbit`, `start` | both agents reconnect, nobody changes role |
 | the primary is stopped cleanly | `stop` | the other agent is primary, lookups answer |
