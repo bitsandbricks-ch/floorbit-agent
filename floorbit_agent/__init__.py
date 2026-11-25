@@ -34,6 +34,9 @@ VERSION_HEADER = 'Floorbit-Agent-Version'
 PROTOCOL_HEADER = 'Floorbit-Agent-Protocol'
 # Our clock on every request: the hosted side puts our times right when this box has no NTP.
 CLOCK_HEADER = 'Floorbit-Agent-Clock'
+# lease: follows the primary Floorbit picks; split: logs in only to its own devices of a split group
+# (plugin_host.owns); syslog_hold: the syslog relay holds other agents' lines for a takeover.
+CAPABILITIES = ('lease', 'split', 'syslog_hold')
 PROTOCOL = 2              # the newest agent protocol this agent speaks; the hosted side says which it does
 LINK_IDLE = 60            # the hosted side sends something at least every 20 s: quiet this long, it's gone
 LINK_RETRY = 300          # after the link failed, long-poll this long before trying it again
@@ -659,6 +662,9 @@ class Agent:
             # Where laptops in the hall reach this agent, for Floorbit's seat walk-through.
             **({'lan_url': self.lan_url} if self.lan_url else {}),
             'front_door_ports': self.front_door_ports,
+            # What this agent can do, so Floorbit turns each on only for agents that can (its
+            # agent_ha.CAPABILITIES) and falls back for the others.
+            'capabilities': list(CAPABILITIES),
             **({'settings': self.hosted_report()} if self.hosted is not None else {}),
             **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
             **({'updates': self.plugins.updater.report()}

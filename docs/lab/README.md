@@ -195,8 +195,9 @@ minutes.
 ### High availability: failover times
 
 [`lab/ha_drill.py`](../../lab/ha_drill.py) times what the crew notices when one of the two agents
-goes away (Floorbit issue #1405). It runs on the machine that runs the lab, since it stops and
-starts the containers, and needs a Floorbit with the lease (FLOORBIT_REF after Floorbit #1405):
+goes away (Floorbit issues #1405 and #1441). It runs on the machine that runs the lab, since it
+stops and starts the containers, and CI's `lab` job runs it after the other drills, with the two
+agents splitting the devices between them. By hand:
 
 ```sh
 docker compose -f lab/compose.yml up -d --wait
