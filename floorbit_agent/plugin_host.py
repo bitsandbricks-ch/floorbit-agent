@@ -16,6 +16,7 @@ whoever runs the hall decides what the hosted side may change in it.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import json
 import math
@@ -37,6 +38,7 @@ HA_HINT_FRESH = 3 * PULL_EVERY
 # answered this recently and the link didn't drop since it was given: it hands the lease to another
 # agent as soon as this one's link closes, so holding on longer would be the second login.
 LEASE_HOLD = 30
+
 PULL_UNSUPPORTED = 600     # a hosted Floorbit without agent plugins: ask again this rarely
 SEND_RETRY = 10
 # A plugin thread that raises is started again, waiting longer each time (5 s, 10 s, ... up to
@@ -93,6 +95,14 @@ def _bounded(fn, timeout, name):
     return not t.is_alive(), box.get('error')
 
 
+
+def split_owner(device, members):
+    """The agent of ``members`` that owns ``device``: the same rendezvous hash as Floorbit's
+    agent_ha.split_owner, so both sides agree without asking each other."""
+    key = str(device or '').lower()
+    return max(sorted(members), key=lambda m: hashlib.sha256(f'{m}|{key}'.encode()).digest(), default=None)
+
+
 class AgentContext:
     """What one plugin's agent part works with. Same shape as floorbit.plugins.agent.MemoryContext."""
 
@@ -123,6 +133,11 @@ class AgentContext:
         """True unless VRRP runs here and another agent holds the first VIP: only the primary
         polls devices and logs in, so two agents in one hall never do it twice (docs/vrrp.md)."""
         return self.host.primary()
+
+    def owns(self, device):
+        """In a group that splits its devices: is ``device`` this agent's own? None when it
+        doesn't split. Its being here also tells plugins this host follows the split."""
+        return self.host.owns(device)
 
     # logging and health ---------------------------------------------------------------
     def log(self, message):
@@ -158,7 +173,7 @@ class AgentContext:
 
     def may_login(self, device, credential, rev=None):
         # A standby leaves logins to the primary: two agents never try the same one (lockouts).
-        return self.host.may_login() and self.auth.may_login(device, credential, rev)
+        return self.host.may_login(device=device) and self.auth.may_login(device, credential, rev)
 
     def gauge(self, name, value):
         self.health_.gauge(name, value)
@@ -629,6 +644,10 @@ class PluginHost:
         before = self.lease
         self.lease = {'primary': raw['primary'],
                       'members': members if isinstance(members, int) and not isinstance(members, bool) else 2}
+        split, me = raw.get('split'), raw.get('me')
+        if isinstance(split, list) and isinstance(me, str) and me in split and len(split) <= 32 \
+                and all(isinstance(m, str) for m in split):
+            self.lease.update(split=sorted(split), me=me)   # the group splits its devices (floorbit #1441)
         self._lease_heard = time.monotonic() if now is None else now
         if before is None or before['primary'] != self.lease['primary']:
             self.report_soon()          # Floorbit keeps the lease where the reports say it is
@@ -652,10 +671,22 @@ class PluginHost:
                 return self._note_primary(lease['primary'])
         return self._vrrp_primary(now)
 
-    def may_login(self, now=None):
-        """Logins to devices: the primary only, and with Floorbit's lease only while it is fresh,
-        since Floorbit may have given it to another agent while this one couldn't hear it."""
+    def owns(self, device):
+        """Is ``device`` this agent's own in a group that splits its devices? None when it doesn't
+        split (then the primary has them all)."""
+        lease = self.lease
+        if not lease or not lease.get('split') or not device:
+            return None
+        return split_owner(device, lease['split']) == lease['me']
+
+    def may_login(self, now=None, device=None):
+        """Logins to devices: the primary only (or, in a group that splits its devices, the
+        device's owner), and with Floorbit's lease only while it is fresh, since Floorbit may have
+        moved the work to another agent while this one couldn't hear it."""
         now = time.monotonic() if now is None else now
+        owns = self.owns(device)
+        if owns is not None:
+            return owns and self._lease_fresh(now)
         if not self.primary(now):
             return False
         lease = self.lease

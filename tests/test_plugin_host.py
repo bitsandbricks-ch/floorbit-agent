@@ -481,6 +481,39 @@ def test_an_older_floorbit_sends_no_lease(setup):
         assert host.lease is None
 
 
+def test_in_a_split_group_each_agent_logs_in_to_its_own_devices(setup):
+    """Floorbit #1441: the group splits its devices, and the owner logs in, primary or not."""
+    host, hosted, agent, _lines = setup
+    agent.last_contact = time.time()
+    hosted.ha = {"lease": {"primary": False, "members": 2, "split": ["a", "b"], "me": "b"}}
+    hosted.etag = "e1"
+    host.pull()
+    mine = [d for d in (f"sw-{i}" for i in range(40)) if plugin_host.split_owner(d, ["a", "b"]) == "b"]
+    theirs = [d for d in (f"sw-{i}" for i in range(40)) if d not in mine]
+    assert mine and theirs
+    assert all(host.may_login(device=d) for d in mine)
+    assert not any(host.may_login(device=d) for d in theirs)
+    agent.last_contact = time.time() - plugin_host.LEASE_HOLD - 1        # Floorbit out of reach
+    assert not any(host.may_login(device=d) for d in mine)      # the split may have changed
+
+
+def test_the_owner_matches_floorbits(setup):
+    try:
+        from floorbit.agent_ha import split_owner
+    except ImportError:          # a FLOORBIT_REF from before the split
+        return
+    for d in (f"sw-{i}" for i in range(40)):
+        assert plugin_host.split_owner(d, ["a", "b", "c"]) == split_owner(d, ["a", "b", "c"])
+
+
+def test_a_bad_split_is_ignored(setup):
+    host, hosted, _agent, _lines = setup
+    for bad in ({"split": "a,b", "me": "a"}, {"split": ["a", "b"], "me": "c"}, {"split": ["a", 2], "me": "a"}):
+        hosted.ha, hosted.etag = {"lease": {"primary": True, "members": 2, **bad}}, f"e-{bad!r}"
+        host.pull()
+        assert "split" not in host.lease and host.owns("sw-1") is None
+
+
 # ── trying to break it ──────────────────────────────────────────────────────────────────
 
 HUNG_PY = """
