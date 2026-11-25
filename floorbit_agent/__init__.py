@@ -20,6 +20,7 @@ import io
 import json
 import os
 import pathlib
+import random
 import signal
 import sys
 import threading
@@ -434,6 +435,7 @@ class Agent:
         self._beat_at = 0
         self._beat_failing = False
         self.last_contact = 0     # time.time() the hosted Floorbit last answered (/healthz)
+        self.dropped_at = 0       # time.monotonic() the connection or link last dropped (plugin_host's lease)
         self._report_at = None    # time.monotonic() of the last report; None: send one soon
         self._report_https = True  # False once the hosted side says it has no report endpoint
         from .metrics import Metrics
@@ -663,6 +665,8 @@ class Agent:
                if getattr(self.plugins, 'updater', None) is not None else {}),
             **({'vrrp': {'primary': self.plugins.primary(), 'holds': self.plugins.vrrp.holds()}}
                if getattr(self.plugins, 'vrrp', None) else {}),
+            **({'lease': self.plugins.lease_held()}
+               if getattr(self.plugins, 'lease', None) is not None else {}),
             'captive_shown': m.get('floorbit_agent_captive_answers_total', {'answer': 'captive'}),
             'captive_done': m.get('floorbit_agent_captive_answers_total', {'answer': 'done'}),
         }
@@ -827,6 +831,7 @@ class Agent:
             if self._stop.is_set():
                 return True
             if self.link_opened:
+                self.dropped_at = time.monotonic()
                 self.metrics.inc('floorbit_agent_link_drops_total')
                 self.log(logs.warning(f'[agent] the WebSocket link dropped ({exc}); connecting again'))
                 if time.monotonic() - started < LINK_STEADY:
@@ -865,9 +870,16 @@ class Agent:
                 else:
                     self.log(logs.warning(f'[agent] cannot reach {self.url} ({exc}); trying again in {backoff} s'))
                 self.metrics.set('floorbit_agent_connected', 0)
+                self.dropped_at = time.monotonic()
                 connected = False
-                self._stop.wait(backoff)
+                self._stop.wait(jittered(backoff))
                 backoff = min(backoff * 2, MAX_BACKOFF)
+
+
+def jittered(seconds, rand=random.random):
+    """``seconds`` give or take a fifth: after a hosted restart every agent (of every tenant) lost
+    the link at the same moment, and without this they would all knock again in the same second."""
+    return seconds * (0.8 + 0.4 * rand())
 
 
 def check(agent, execute, out=print):
@@ -1091,6 +1103,8 @@ def main(argv=None):
     agent.heartbeat = heartbeat_file()
     agent.on_connect.append(handover.send)
     host = plugins_ref['host'] = start_plugins(agent, app)
+    # Back after a drop: the lease it had is void (plugin_host.primary), so ask for the config now.
+    agent.on_connect.append(lambda _agent: host.reload())
     if argv and argv[0] == 'check':
         if handover.names:
             print(f'-    no longer read here, set up in Settings > Plugins instead: {", ".join(handover.names)}')
@@ -1110,6 +1124,12 @@ def main(argv=None):
     logs.say(f'[agent] Floorbit agent {version} starting: hosted Floorbit {url}, log level {level}, '
              f'status page and metrics on {os.environ.get("FLOORBIT_AGENT_METRICS", "0.0.0.0:9520")}')
     keepalived = start_vrrp(agent, os.environ, out=logs.say)
+    if keepalived is False:
+        # Before the plugins start: their listeners would bind the event network's ports for nothing.
+        host.stop()
+        if metrics_server:
+            metrics_server.shutdown()
+        return 2
     host.vrrp = keepalived or None
     agent.metrics.collect(host.collect)
     host.start()
@@ -1117,11 +1137,6 @@ def main(argv=None):
     reporter = logs.Reporter(lambda: status_page.status(agent, agent_metrics.health_of(agent, HEALTHY_FOR)[1]),
                              logs.summary_every(os.environ))
     reporter.start()
-    if keepalived is False:
-        host.stop()
-        if metrics_server:
-            metrics_server.shutdown()
-        return 2
     # docker stop sends SIGTERM: leave the way Ctrl+C does, so the plugins stop cleanly.
     signal.signal(signal.SIGTERM, _stop_on_term)
     try:

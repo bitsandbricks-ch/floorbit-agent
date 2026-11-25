@@ -13,6 +13,10 @@ once the hosted side is back, behind the live lines (floorbit#465).
 
 Each line carries an ID made of where it came from and what it says, the same on every agent that
 heard it, so the hosted side can keep one copy when two agents, or a replay, send it twice.
+
+In a group of agents that splits its devices (floorbit#1441), devices log to every agent, and only
+a device's owner sends its lines on. ``keep(sender)`` says which are this agent's; the others' lines
+are held for ``HOLD`` seconds and sent after all when ``take_over()`` finds they became its own.
 """
 import contextlib
 import hashlib
@@ -32,6 +36,7 @@ BATCH_BYTES = 8 * 1024 ** 2   # and a post stays well under its 32 MB: 2000 long
                               # come to 47 MB as JSON, which it refused (413) or, gzipped, took as
                               # empty, losing them all
 EVERY = 2.0              # seconds between sends while lines come in
+HOLD = 60                # seconds another agent's lines are kept for a takeover
 REPLAY = 5               # buffered batches per round once the hosted side is back: the backlog
                          # catches up at 5,000 lines a second without crowding out live lines
 
@@ -41,10 +46,13 @@ class TurnedOff(RuntimeError):
 
 
 class Relay:
-    def __init__(self, send, port, bind='0.0.0.0', backlog=BACKLOG, log=logs.say, spool=None):
+    def __init__(self, send, port, bind='0.0.0.0', backlog=BACKLOG, log=logs.say, spool=None, keep=None):
         """``send(lines, dropped)`` posts one batch; it raises on failure. ``spool``: a
-        spool.Spool for the lines that can't be sent now; without it they wait in memory."""
+        spool.Spool for the lines that can't be sent now; without it they wait in memory.
+        ``keep(sender)``: False for a device another agent of the group owns (None: all)."""
         self.send = send
+        self.keep = keep
+        self.held = deque()      # other agents' lines, oldest first, for a takeover
         self.spool = spool
         self.replayed = 0
         self.port = port
@@ -75,8 +83,34 @@ class Relay:
             if len(self.lines) >= self.backlog:
                 self.dropped += 1
                 return
-            self.lines.append({'raw': raw, 'from': sender, 'at': time.time() if now is None else now,
-                               'id': line_id(sender, raw)})
+            line = {'raw': raw, 'from': sender, 'at': time.time() if now is None else now,
+                    'id': line_id(sender, raw)}
+            if self.keep is not None and not self.keep(sender):
+                self._hold(line)
+                return
+            self.lines.append(line)
+
+    def _hold(self, line):
+        """Call with the lock held."""
+        self.held.append(line)
+        while self.held and (len(self.held) > self.backlog or self.held[0]['at'] < line['at'] - HOLD):
+            self.held.popleft()
+
+    def take_over(self, keep=None, now=None):
+        """New owners from Floorbit: lines held from devices that are now this agent's go out, the
+        last minute of them, so a failover loses none. Returns how many."""
+        now = time.time() if now is None else now
+        with self._lock:
+            if keep is not None:
+                self.keep = keep
+            mine = [line for line in self.held if line['at'] >= now - HOLD
+                    and (self.keep is None or self.keep(line['from']))]
+            self.held = deque(line for line in self.held if line['at'] >= now - HOLD
+                              and not (self.keep is None or self.keep(line['from'])))
+            room = max(0, self.backlog - len(self.lines))
+            self.dropped += max(0, len(mine) - room)
+            self.lines.extend(mine[:room])
+        return min(len(mine), room)
 
     @property
     def all_dropped(self):

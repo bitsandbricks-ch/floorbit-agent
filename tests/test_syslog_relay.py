@@ -2,7 +2,7 @@
 import threading
 import time
 
-from floorbit_agent.syslog_relay import Relay
+from floorbit_agent.syslog_relay import HOLD, Relay
 
 
 def test_the_last_send_on_the_way_out_waits_for_the_send_thread():
@@ -25,3 +25,21 @@ def test_the_last_send_on_the_way_out_waits_for_the_send_thread():
     relay.stop()          # used to raise "pop from an empty deque" here
     t.join()
     assert most[0] == 1 and not relay.lines
+
+
+def test_only_the_owner_sends_a_devices_lines_the_other_keeps_a_minute():
+    relay = Relay(lambda lines, dropped: None, 0, keep=lambda sender: sender == "192.0.2.11")
+    relay.receive("<13>link up", "192.0.2.11", now=1000)
+    relay.receive("<13>link down", "192.0.2.12", now=1000)
+    relay.receive("<13>too old", "192.0.2.12", now=1000 - HOLD - 1)
+    assert [line["from"] for line in relay.lines] == ["192.0.2.11"]
+    # The other agent went: its device is this one's now, and the last minute goes out after all.
+    assert relay.take_over(lambda sender: True, now=1001) == 1
+    assert [line["raw"] for line in relay.lines] == ["<13>link up", "<13>link down"]
+    assert not relay.held
+
+
+def test_without_owners_every_line_goes_out_as_before():
+    relay = Relay(lambda lines, dropped: None, 0)
+    relay.receive("<13>hello", "192.0.2.12")
+    assert len(relay.lines) == 1 and not relay.held
