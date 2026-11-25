@@ -35,8 +35,9 @@ PROTOCOL_HEADER = 'Floorbit-Agent-Protocol'
 # Our clock on every request: the hosted side puts our times right when this box has no NTP.
 CLOCK_HEADER = 'Floorbit-Agent-Clock'
 # lease: follows the primary Floorbit picks; split: logs in only to its own devices of a split group
-# (plugin_host.owns); syslog_hold: the syslog relay holds other agents' lines for a takeover.
-CAPABILITIES = ('lease', 'split', 'syslog_hold')
+# (plugin_host.owns); syslog_hold: the syslog relay holds other agents' lines for a takeover;
+# self_update: installs a signed agent update Floorbit offers (self_update.py).
+CAPABILITIES = ('lease', 'split', 'syslog_hold', 'self_update')
 PROTOCOL = 2              # the newest agent protocol this agent speaks; the hosted side says which it does
 LINK_IDLE = 60            # the hosted side sends something at least every 20 s: quiet this long, it's gone
 LINK_RETRY = 300          # after the link failed, long-poll this long before trying it again
@@ -669,6 +670,8 @@ class Agent:
             **({'plugins': self.plugins.report()} if self.plugins is not None else {}),
             **({'updates': self.plugins.updater.report()}
                if getattr(self.plugins, 'updater', None) is not None else {}),
+            **({'agent_update': self.plugins.self_updater.report()}
+               if getattr(self.plugins, 'self_updater', None) is not None else {}),
             **({'vrrp': {'primary': self.plugins.primary(), 'holds': self.plugins.vrrp.holds()}}
                if getattr(self.plugins, 'vrrp', None) else {}),
             **({'lease': self.plugins.lease_held()}
@@ -973,6 +976,8 @@ def start_plugins(agent, app):
     host.updater = Updater(agent, sources.registry, root, floorbit_version(app), log=logs.say)
     host.updater.restore()
     host.specs = agent_specs(sources.registry)      # with the bundles installed before
+    from .self_update import SelfUpdater
+    host.self_updater = SelfUpdater(agent, root, log=logs.say)
     agent.plugins = host
     return host
 
@@ -1170,4 +1175,9 @@ def main(argv=None):
             keepalived.stop()
         if metrics_server:
             metrics_server.shutdown()
+    # An update was installed: floorbit_agent_boot starts the agent again on it.
+    if getattr(host, 'self_updater', None) is not None and host.self_updater.restart:
+        import floorbit_agent_boot
+        logs.say('[agent] stopped for the agent update')
+        return floorbit_agent_boot.RESTART
     return 0

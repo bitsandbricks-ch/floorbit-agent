@@ -17,6 +17,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["floorbit_agent"]
+py-modules = ["floorbit_agent_boot"]
 
 [tool.setuptools.dynamic]
 version = { file = "VERSION" }
