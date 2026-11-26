@@ -357,6 +357,7 @@ def dns_feeds(registry, since=0):
         except PluginError as exc:
             out.append({'plugin': spec.id, 'name': spec.name, 'error': str(exc)[:300]})
             continue
+        _learn_names(raw)
         items = []
         for e in (raw if isinstance(raw, list) else [])[:dns.MAX_PER_POLL]:
             if not isinstance(e, dict):
@@ -367,6 +368,19 @@ def dns_feeds(registry, since=0):
                           if client else None})
         out.append({'plugin': spec.id, 'name': spec.name, 'items': items})
     return out
+
+
+def _learn_names(raw):
+    """The answers in the lookups name the seats' HTTPS flows (floorbit/flows/names.py, #1600). They
+    stay here, in memory: dns_feeds sends neither the answers nor the client."""
+    try:
+        from floorbit.flows import names
+    except ImportError:
+        return   # a Floorbit from before #1600
+    try:
+        names.learn_rows(raw if isinstance(raw, list) else [])
+    except Exception as exc:  # noqa: BLE001  # naming flows is extra; DNS analytics must go on
+        logs.say(logs.warning(f'[dns] could not read the answers for traffic names: {exc}'))
 
 
 def wifi_feeds(registry):
