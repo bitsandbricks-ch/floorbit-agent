@@ -377,7 +377,7 @@ def test_the_report_says_what_runs_and_what_waits(tmp_path, keypair):
     report = u.report()
     assert report['policy'] == 'auto' and report['running'] == '1.0.0' and report['image_id'] == IMAGE
     assert report['pending'] == {'version': '1.1.0', 'why': 'needs a new image'}
-    assert report['booted'] is True and report['trial'] is False
+    assert report['booted'] is True and report['trial'] is False and report['events'] == []
 
 
 def test_the_release_script_builds_a_bundle_an_image_accepts(tmp_path, keypair, monkeypatch):
