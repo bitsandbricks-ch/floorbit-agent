@@ -155,4 +155,4 @@ class SelfUpdater:
         return {'policy': self.policy, 'running': self.running, 'image': self.image_version,
                 'image_id': self.image, 'booted': self.booted, 'keys': sorted(self.keys),
                 'pending': self.pending, 'trial': bool(st.data.get('trial')),
-                'rolled_back': list(st.data.get('bad') or []), 'last': events[-1] if events else None}
+                'rolled_back': list(st.data.get('bad') or []), 'events': events[-5:]}

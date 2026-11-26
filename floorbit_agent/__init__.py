@@ -36,8 +36,12 @@ PROTOCOL_HEADER = 'Floorbit-Agent-Protocol'
 CLOCK_HEADER = 'Floorbit-Agent-Clock'
 # lease: follows the primary Floorbit picks; split: logs in only to its own devices of a split group
 # (plugin_host.owns); syslog_hold: the syslog relay holds other agents' lines for a takeover;
-# self_update: installs a signed agent update Floorbit offers (self_update.py).
-CAPABILITIES = ('lease', 'split', 'syslog_hold', 'self_update')
+# self_update: installs a signed agent update Floorbit offers (self_update.py); syslog_ids: each
+# relayed line has an id, so Floorbit keeps a group's copies once; plugin_updates: installs signed
+# plugin updates (bundles.py); key_roll: fetches a new key when Floorbit rolls it; cert: makes its
+# own TLS key and has Floorbit sign it (hosted.Cert).
+CAPABILITIES = ('lease', 'split', 'syslog_hold', 'self_update', 'syslog_ids', 'plugin_updates',
+                'key_roll', 'cert')
 PROTOCOL = 2              # the newest agent protocol this agent speaks; the hosted side says which it does
 LINK_IDLE = 60            # the hosted side sends something at least every 20 s: quiet this long, it's gone
 LINK_RETRY = 300          # after the link failed, long-poll this long before trying it again
