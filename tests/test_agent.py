@@ -363,3 +363,22 @@ def test_the_report_sums_busy_calls_and_failed_answers_over_methods():
     a.metrics.inc("floorbit_agent_answers_total", {"way": "failed"}, by=2)
     report = a.report()
     assert report["calls_busy"] == 4 and report["answers_failed"] == 2
+
+
+def test_the_report_carries_the_disk_budget_and_the_pass_runs_with_nothing_turned_on(tmp_path):
+    from floorbit import disk_budget
+
+    from floorbit_agent import start_disk_budget
+    disk_budget.register("test-kind", disk_budget.Folder(str(tmp_path)))
+    (tmp_path / "a.bin").write_bytes(b"x" * 10)
+    try:
+        stop = start_disk_budget(every=0.05)
+        deadline = time.time() + 5
+        while "test-kind" not in (disk_budget.report().get("kinds") or {}) and time.time() < deadline:
+            time.sleep(0.02)
+        stop.set()
+        report = make(FakeHost()).report()
+        row = report["disk"]["kinds"]["test-kind"]
+        assert row["bytes"] == 10 and row["files"] == 1 and row["dropped"] == 0
+    finally:
+        disk_budget.unregister("test-kind")

@@ -169,21 +169,44 @@ def test_files_are_private_to_the_agent(tmp_path):
     assert oct(os.stat(spool.folder).st_mode & 0o777) == '0o700'
 
 
-def test_buffer_limits_come_from_the_environment():
-    from floorbit_agent.plugin_host import spool_limits
-    assert spool_limits({}) == (2048 * 1024 ** 2, 24 * 3600)
-    assert spool_limits({'FLOORBIT_AGENT_BUFFER_MAX_MB': '512', 'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '6'}) == \
-        (512 * 1024 ** 2, 6 * 3600)
+def test_buffer_age_comes_from_the_environment():
+    from floorbit_agent.plugin_host import spool_max_age
+    assert spool_max_age({}) == 24 * 3600
+    assert spool_max_age({'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '6'}) == 6 * 3600
 
 
-@pytest.mark.parametrize('setting', [
-    {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'lots'}, {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'inf'},
-    {'FLOORBIT_AGENT_BUFFER_MAX_MB': 'nan'}, {'FLOORBIT_AGENT_BUFFER_MAX_MB': '1e400'},
-    {'FLOORBIT_AGENT_BUFFER_MAX_MB': '0'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': 'nan'},
-    {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '0'}, {'FLOORBIT_AGENT_BUFFER_MAX_HOURS': '-1'}])
-def test_a_buffer_number_that_is_no_size_keeps_the_default(setting):
-    from floorbit_agent.plugin_host import spool_limits
-    assert spool_limits(setting) == (2048 * 1024 ** 2, 24 * 3600)
+@pytest.mark.parametrize('value', ['lots', 'inf', 'nan', '1e400', '0', '-1'])
+def test_a_buffer_age_that_is_no_age_keeps_the_default(value):
+    from floorbit_agent.plugin_host import spool_max_age
+    assert spool_max_age({'FLOORBIT_AGENT_BUFFER_MAX_HOURS': value}) == 24 * 3600
+
+
+def test_the_buffer_counts_toward_the_disk_budget_and_gives_way_oldest_first(tmp_path):
+    from floorbit import disk_budget
+    spool = Spool(str(tmp_path / 's'), log=lambda *_: None)
+    other = Spool(str(tmp_path / 'o'), log=lambda *_: None)
+    start = time.time() - 600          # older than the other spool's file, younger than a day
+    for n in range(10):
+        spool.put([{'raw': f'line {n}' + 'x' * 1000}])
+        os.utime(os.path.join(spool.folder, f'{n:012d}.jsonl'), (start + n, start + n))
+    other.put([{'raw': 'other'}])
+    mine = [f for f in disk_budget._kinds['buffer'].files() if f[0].startswith(str(tmp_path))]
+    assert len(mine) == 11
+    size = spool.size
+    disk_budget.enforce(env={disk_budget.ENV: '100000'})       # well within: nothing goes
+    assert spool.size == size and spool.dropped == 0
+    real = disk_budget.budget
+    disk_budget.budget = lambda used, paths, env=None: (used - 3 * 1000, False)
+    try:
+        out = disk_budget.enforce()
+    finally:
+        disk_budget.budget = real
+    # Removed through the spool: its own numbers follow, the records count as dropped.
+    assert spool.dropped == 3 and len(spool) == 7 and spool.size < size
+    assert out['kinds']['buffer']['dropped'] >= 3
+    _, records = spool.oldest()
+    assert records[0]['raw'].startswith(f'line {spool.dropped}')       # the oldest went first
+    assert len(other) == 1
 
 
 def test_a_burst_of_syslog_is_read_by_one_thread_with_room_in_the_kernel():

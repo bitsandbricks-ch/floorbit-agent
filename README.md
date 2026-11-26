@@ -139,8 +139,18 @@ Update the hosted Floorbit first: an older one doesn't know this handover.
 What a plugin sends to the hosted Floorbit (syslog lines, flow summaries, ...) goes to a disk
 buffer in the agent's state volume first, so nothing is lost while the hosted side is away or the
 agent restarts. Once it is back, each plugin catches up oldest first. Each plugin's buffer keeps at
-most 2 GB and 24 hours (`FLOORBIT_AGENT_BUFFER_MAX_MB`, `FLOORBIT_AGENT_BUFFER_MAX_HOURS`); past that
-the oldest go first, counted in `floorbit_agent_plugin_dropped`. Every syslog line carries an ID
+most 24 hours (`FLOORBIT_AGENT_BUFFER_MAX_HOURS`); past that the oldest go first, counted in
+`floorbit_agent_plugin_dropped`.
+
+## The disk budget
+
+Everything the agent keeps on its disk (the buffer above, raw flows, a plugin's own files) shares
+one budget, set as *Disk budget* on the agent's page in Floorbit (`FLOORBIT_AGENT_DISK_BUDGET_MB`).
+It applies at once, without a restart. Left at 0 it is automatic: half of what the state volume
+could hold for the agent. Past the budget the agent removes the oldest files first, whichever kind
+they are, once a minute; the newest file of each kind always stays. The agent's page shows the
+budget, what each kind uses and how many files went. Floorbit's docs/agent.md, "The agent's disk
+budget", says more. Every syslog line carries an ID
 made of its sender and text, the same on every agent, so the hosted side can drop copies.
 
 A busy event's switches send syslog and NetFlow in bursts. The agent asks the kernel for an 8 MB

@@ -23,7 +23,8 @@ import time
 FIELDS = {
     'metrics': ('FLOORBIT_AGENT_METRICS', False),
     'metrics_token': ('FLOORBIT_AGENT_METRICS_TOKEN', False),
-    'buffer_max_mb': ('FLOORBIT_AGENT_BUFFER_MAX_MB', False),
+    # Read again on every pass of the budget (floorbit/disk_budget.py).
+    'disk_budget_mb': ('FLOORBIT_AGENT_DISK_BUDGET_MB', True),
     'buffer_max_hours': ('FLOORBIT_AGENT_BUFFER_MAX_HOURS', False),
     'telemetry_port': ('FLOORBIT_TELEMETRY_PORT', False),
     'vrrp_vips': ('FLOORBIT_AGENT_VRRP_VIPS', False),

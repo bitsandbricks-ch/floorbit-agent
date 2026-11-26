@@ -107,3 +107,5 @@ class FlowsRelay:
         if self._sock is not None:
             self._sock.close()
             self._sock = None
+        # The minutes still open would be lost with the process: write them now.
+        self.collector.flush()
