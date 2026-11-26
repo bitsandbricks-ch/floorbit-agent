@@ -10,8 +10,11 @@ from floorbit_agent.flows_relay import FlowsRelay
 
 class Collector:
     def __init__(self):
-        self.got, self.chores = [], 0
+        self.got, self.chores, self.flushed = [], 0, 0
         self.publish = None
+
+    def flush(self):
+        self.flushed += 1
 
     def enabled(self):
         return True
@@ -52,3 +55,11 @@ def test_a_packet_the_collector_cannot_read_does_not_stop_the_listener():
         assert "agent-flows" in {t.name for t in threading.enumerate()}
     finally:
         relay.stop()
+
+
+def test_stopping_writes_the_minutes_still_open():
+    collector = Collector()
+    relay = FlowsRelay(None, 0, bind="127.0.0.1", collector=collector, log=lambda *_: None)
+    relay.start()
+    relay.stop()
+    assert collector.flushed == 1

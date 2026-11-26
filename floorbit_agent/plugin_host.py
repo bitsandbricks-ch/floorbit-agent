@@ -48,24 +48,20 @@ RESTART_FIRST = 5
 RESTART_MAX = 300
 RESTART_LOUD = 5
 RESTART_RESET = 600
-# What a plugin keeps on disk while the hosted side is away, each plugin on its own; the defaults
-# are those of the syslog buffer from before syslog was a plugin.
-SPOOL_MAX_MB = 2048
+# How long a plugin's records wait on disk while the hosted side is away. Their size counts toward
+# the agent's one disk budget (floorbit/disk_budget.py), not a cap of their own.
 SPOOL_MAX_HOURS = 24
 
 
-def spool_limits(env):
-    """The disk buffer's size and age from ``FLOORBIT_AGENT_BUFFER_MAX_MB`` and ``_MAX_HOURS``.
-    Anything that is no size (``0``, ``-1``, ``nan``, ``lots``) keeps the default: without the
-    buffer a plugin's records would have nowhere to wait."""
-    def number(name, default):
-        try:
-            value = float(env.get(name) or default)
-        except ValueError:
-            return float(default)
-        return value if math.isfinite(value) and value > 0 else float(default)
-    return (int(number('FLOORBIT_AGENT_BUFFER_MAX_MB', SPOOL_MAX_MB) * 1024 ** 2),
-            number('FLOORBIT_AGENT_BUFFER_MAX_HOURS', SPOOL_MAX_HOURS) * 3600)
+def spool_max_age(env):
+    """The disk buffer's age in seconds from ``FLOORBIT_AGENT_BUFFER_MAX_HOURS``. Anything that is
+    no age (``0``, ``-1``, ``nan``, ``lots``) keeps the default: without the buffer a plugin's
+    records would have nowhere to wait."""
+    try:
+        value = float(env.get('FLOORBIT_AGENT_BUFFER_MAX_HOURS') or SPOOL_MAX_HOURS)
+    except ValueError:
+        value = SPOOL_MAX_HOURS
+    return (value if math.isfinite(value) and value > 0 else SPOOL_MAX_HOURS) * 3600
 
 
 BATCH = 50                 # records a sender posts before it looks at the spool again
@@ -206,9 +202,8 @@ class AgentContext:
         with self._spool_lock:
             if self._spool is None:
                 from .spool import Spool
-                max_bytes, max_age = spool_limits(os.environ)
-                self._spool = Spool(os.path.join(self.state_dir, 'outbox'), max_bytes, max_age,
-                                    log=self.host.log)
+                self._spool = Spool(os.path.join(self.state_dir, 'outbox'),
+                                    max_age=spool_max_age(os.environ), log=self.host.log)
                 self.thread(self._sender, name=f'plugin-{self.id}-send')
             return self._spool
 

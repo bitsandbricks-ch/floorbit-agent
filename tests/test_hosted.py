@@ -121,7 +121,7 @@ def test_settings_from_floorbit_go_in_but_the_env_wins(tmp_path):
     assert got["values"]["metrics"] == {"source": "env", "value": "127.0.0.1:9600"}
     assert got["values"]["log_level"] == {"source": "floorbit", "value": "debug"}
     assert got["values"]["metrics_token"] == {"source": "floorbit", "set": True}
-    assert got["values"]["buffer_max_mb"] == {"source": "default"}
+    assert got["values"]["disk_budget_mb"] == {"source": "default"}
     assert got["values"]["FLOORBIT_AGENT_ALLOW_ACTIONS"] == {"source": "env", "value": "lancache.*"}
     assert got["pending"] == ["metrics_token", "vrrp_vips"]                   # the log level works at once
     assert "example-token" not in json.dumps(got)

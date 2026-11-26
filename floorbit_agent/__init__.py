@@ -676,6 +676,8 @@ class Agent:
                if getattr(self.plugins, 'vrrp', None) else {}),
             **({'lease': self.plugins.lease_held()}
                if getattr(self.plugins, 'lease', None) is not None else {}),
+            # The one disk budget and what each kind keeps (floorbit/disk_budget.py, #1485).
+            **({'disk': disk} if (disk := _disk_report()) else {}),
             'captive_shown': m.get('floorbit_agent_captive_answers_total', {'answer': 'captive'}),
             'captive_done': m.get('floorbit_agent_captive_answers_total', {'answer': 'done'}),
         }
@@ -1056,6 +1058,32 @@ def key_from_file(path, wait=KEY_FILE_WAIT, sleep=time.sleep):
         sleep(1)
 
 
+DISK_BUDGET_EVERY = 60
+
+
+def _disk_report():
+    from floorbit import disk_budget
+    return disk_budget.report()
+
+
+def start_disk_budget(every=DISK_BUDGET_EVERY):
+    """Keep the agent within its disk budget, whatever is turned on: the buffer fills while
+    Floorbit is away even with flows off. The flow collector enforces it too; a pass is cheap."""
+    from floorbit import disk_budget
+    stop = threading.Event()
+
+    def run():
+        while True:
+            try:
+                disk_budget.enforce()
+            except Exception as exc:  # noqa: BLE001  # tried again next round; never stops the agent
+                logs.say(f'[agent] the disk budget pass failed: {exc!r}'[:300])
+            if stop.wait(every):
+                return
+    threading.Thread(target=run, name='agent-disk-budget', daemon=True).start()
+    return stop
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] not in ('check', 'run', 'health', 'plugins'):
@@ -1148,6 +1176,7 @@ def main(argv=None):
     reporter = logs.Reporter(lambda: status_page.status(agent, agent_metrics.health_of(agent, HEALTHY_FOR)[1]),
                              logs.summary_every(os.environ))
     reporter.start()
+    budget_stop = start_disk_budget()
     # docker stop sends SIGTERM: leave the way Ctrl+C does, so the plugins stop cleanly.
     signal.signal(signal.SIGTERM, _stop_on_term)
     try:
@@ -1169,6 +1198,7 @@ def main(argv=None):
         agent.stop()
         logs.say('[agent] stopping')
     finally:
+        budget_stop.set()
         reporter.stop()
         host.stop()
         if keepalived:
