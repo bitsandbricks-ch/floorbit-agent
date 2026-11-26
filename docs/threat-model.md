@@ -68,6 +68,14 @@ UDP and sends them on, the flows only as a summary.
   against a key built into the image. Before that, its id and version name folders under the
   agent's state, so an offer whose id or version could be a path (`/some/dir`, `9/../../x`) is
   ignored, and an offer the agent can't read waits instead of stopping the plugins' settings.
+- **Offer an agent update with its own code:** the agent runs an update of itself only when it is
+  signed with the agent key pinned in the image (`floorbit_agent/keys/`, a key apart from the
+  plugin key, held only by the release workflow's `agent-signing` environment), is newer than what
+  runs, was built for this very image and wasn't rolled back here. `floorbit_agent_boot.py` checks
+  the signature again before every start, from the image's own files, so an update can't change
+  what counts as a good update. The most a stolen hosted login can do is offer a release Floorbit's
+  maintainer already signed, or offer nothing; `FLOORBIT_AGENT_UPDATES=approve` or `off` on the
+  agent stops even that.
 - **Flood the agent:** at most `WORKERS` calls of one kind run at a time (more for switch calls and
   terminals, `POOL_SIZES`), and at most `MAX_WAITING`
   wait. Anything more gets a "busy" answer at once, so memory can't grow without end and one slow

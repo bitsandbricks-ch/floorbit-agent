@@ -195,8 +195,9 @@ minutes.
 ### High availability: failover times
 
 [`lab/ha_drill.py`](../../lab/ha_drill.py) times what the crew notices when one of the two agents
-goes away (Floorbit issue #1405). It runs on the machine that runs the lab, since it stops and
-starts the containers, and needs a Floorbit with the lease (FLOORBIT_REF after Floorbit #1405):
+goes away (Floorbit issues #1405 and #1441). It runs on the machine that runs the lab, since it
+stops and starts the containers, and CI's `lab` job runs it after the other drills, with the two
+agents splitting the devices between them. By hand:
 
 ```sh
 docker compose -f lab/compose.yml up -d --wait
@@ -206,7 +207,7 @@ python3 lab/ha_drill.py --report ha-drill.md --json ha-drill.json
 | Step | What it does | Checked (budget) |
 | --- | --- | --- |
 | the primary is killed | `docker compose kill` (the machine dies) | the other agent is primary on the Local agents page (30 s), a seat lookup answers (45 s), new syslog arrives (60 s), the other agent's front door answers (5 s) |
-| it comes back | `start` | it reconnects and does **not** take the lease back for a minute |
+| it comes back | `start` | it reconnects and does **not** take the lease back for a minute, unless it runs more plugins than the other (in the lab agent-b has the listeners and telemetry off): then it takes it back once |
 | the standby stops for 30 s | `stop`, `start` | the primary stays where it is |
 | the hosted Floorbit is away for 60 s | `stop floorbit`, `start` | both agents reconnect, nobody changes role |
 | the primary is stopped cleanly | `stop` | the other agent is primary, lookups answer |

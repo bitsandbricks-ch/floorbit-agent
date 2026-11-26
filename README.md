@@ -55,10 +55,30 @@ and named on its page in Floorbit.
 ## Use
 
 ```sh
-python -m floorbit_agent           # run: poll the hosted Floorbit and answer its calls
+python -m floorbit_agent_boot      # run, from the newest agent update (what the image starts)
+python -m floorbit_agent           # run the code as it is, without updates
 python -m floorbit_agent check     # try each part once and say what works
 python -m floorbit_agent health    # 0 when the hosted Floorbit answered in the last two minutes
+python -m floorbit_agent_boot update [approve [<version>] | retry]   # agent updates, below
 ```
+
+## Updates without a new image
+
+When the hosted Floorbit offers a newer agent release, the agent installs it itself: no new image
+and no Docker access. A release carries a signed update (the agent's code and the Floorbit code it
+runs); the agent takes it only when the signature verifies against the key in its image
+(`floorbit_agent/keys/`), it is newer than what runs, and it was built for this image. A release
+that needs a new image (other Python packages, Telegraf) isn't installed; its page in Floorbit shows
+the pull command as before.
+
+It unpacks the update into its state folder (`agent/<version>/`), stops cleanly and starts again on
+it in the same container. A new version that doesn't reach Floorbit within five minutes, or crashes
+at start, goes back to the version before (or the image's own code) and is never tried again here
+(`update retry` allows it again). In an HA group Floorbit updates one agent at a time.
+
+`FLOORBIT_AGENT_UPDATES` in `agent.env` decides, and only the hall can set it: `auto` (default),
+`approve` (waits for `docker compose exec agent python -m floorbit_agent_boot update approve`) or
+`off`.
 
 Every setting, what works through the agent and the protocol are in Floorbit's
 [docs/agent.md](https://github.com/bitsandbricks-ch/floorbit/blob/master/docs/agent.md).
@@ -74,7 +94,7 @@ environment variable still wins when it is set; the page shows where each value 
 which take effect at the next start (the address and the log level apply at once).
 
 What the hall allows stays in the agent's environment only and is shown read-only:
-`FLOORBIT_AGENT_ALLOW_ACTIONS`, `FLOORBIT_AGENT_PLUGIN_UPDATES` and the networks it may reach
+`FLOORBIT_AGENT_ALLOW_ACTIONS`, `FLOORBIT_AGENT_PLUGIN_UPDATES`, `FLOORBIT_AGENT_UPDATES` and the networks it may reach
 (`FLOORBIT_AGENT_SWITCH_NETS`, `_GAME_NETS`, `_PROBE_NETS`). A stolen Floorbit login can't widen
 them.
 

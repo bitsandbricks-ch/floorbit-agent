@@ -22,7 +22,8 @@ WORKDIR /app
 COPY --from=floorbit /out/requirements.txt /tmp/requirements.txt
 # gunicorn serves Floorbit's pages; the agent serves none.
 RUN grep -v '^gunicorn' /tmp/requirements.txt > /tmp/req.txt \
-    && pip install --no-cache-dir -r /tmp/req.txt && rm /tmp/requirements.txt /tmp/req.txt
+    && pip install --no-cache-dir -r /tmp/req.txt && mv /tmp/requirements.txt /tmp/floorbit-requirements.txt \
+    && rm /tmp/req.txt
 # The agent's own dependencies, as in pyproject.toml (simple-websocket: the WebSocket link).
 RUN pip install --no-cache-dir "requests>=2.31" "simple-websocket>=1.0"
 COPY --from=floorbit /out/ /app/
@@ -33,6 +34,12 @@ RUN rm /app/requirements.txt
 COPY --from=telegraf:1.40.3 /usr/bin/telegraf /usr/local/bin/telegraf
 COPY floorbit_agent/ /app/floorbit_agent/
 COPY VERSION /app/floorbit_agent/VERSION
+# Starts the agent from its newest signed update or from the code above (issue #98). IMAGE_ID says
+# what this image was built from: an update runs only on an image with the same one.
+COPY floorbit_agent_boot.py /app/floorbit_agent_boot.py
+COPY Dockerfile /tmp/Dockerfile
+RUN python /app/floorbit_agent_boot.py image-id /tmp/Dockerfile /tmp/floorbit-requirements.txt > /app/IMAGE_ID \
+    && rm /tmp/Dockerfile /tmp/floorbit-requirements.txt
 
 # keepalived for the optional VRRP mode (vrrp.py). The file capabilities let it set the virtual IPs
 # while the agent runs as a normal user; the kernel only allows them when the container was given
@@ -51,4 +58,4 @@ ENV FLOORBIT_DATA_FILE=/app/state/agent-data.json PYTHONUNBUFFERED=1
 EXPOSE 5514/udp 2055/udp 1162/udp 57000/tcp 8186/tcp 9520/tcp
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=2 \
     CMD ["python", "-m", "floorbit_agent", "health"]
-CMD ["python", "-m", "floorbit_agent"]
+CMD ["python", "-m", "floorbit_agent_boot"]

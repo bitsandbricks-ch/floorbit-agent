@@ -8,6 +8,11 @@ name: Release
 # The tag must match the version file named in .mason.toml ([release] version), and the
 # notes are that version's CHANGELOG.md section (GitHub's generated notes if it has none).
 # Attach build output by adding steps before "Create the release" that write to dist/.
+#
+# The bundle job signs the agent update (issue #98): the agent's code and the Floorbit code at
+# FLOORBIT_REF, which agents on this image install when their Floorbit offers it. Its key is the
+# secret FLOORBIT_AGENT_SIGNING_KEY of the "agent-signing" environment; the public half is
+# floorbit_agent/keys/agent.pub, pinned in every image.
 on:
   push:
     tags: ["v*"]
@@ -16,7 +21,48 @@ permissions:
   contents: read
 
 jobs:
+  bundle:
+    if: ${{ !github.event.repository.is_template }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: agent-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Floorbit at FLOORBIT_REF
+        run: echo "FLOORBIT_REF=$(tr -d '[:space:]' < FLOORBIT_REF)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bitsandbricks-ch/floorbit
+          ref: ${{ env.FLOORBIT_REF }}
+          path: .floorbit
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - run: pip install cryptography
+      - name: Sign and pack
+        env:
+          SIGNING_KEY: ${{ secrets.FLOORBIT_AGENT_SIGNING_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then echo "::error::add FLOORBIT_AGENT_SIGNING_KEY to the agent-signing environment"; exit 1; fi
+          key="$RUNNER_TEMP/key.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$SIGNING_KEY" > "$key")
+          python scripts/agent_bundle.py build --floorbit .floorbit --key "$key" --version "${TAG#v}" --out dist
+          python scripts/agent_bundle.py verify dist/floorbit-agent-"${TAG#v}".tar.gz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-bundle
+          path: dist/
+          retention-days: 1
+
   release:
+    needs: [bundle]
     # Never release the template itself, only repos made from it.
     if: ${{ !github.event.repository.is_template }}
     runs-on: ubuntu-24.04
@@ -25,6 +71,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-bundle
+          path: dist/
       - name: The tag matches the version file
         id: version
         run: python3 .github/scripts/release_version.py "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
